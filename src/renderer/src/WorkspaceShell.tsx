@@ -63,7 +63,7 @@ import { WorkspaceOverlays } from "./WorkspaceOverlays";
  * closes the page, as each row calls `showAgents`. The other pages of the rail - schedule, usage or settings - sit outside that
  * group and inert it.
  */
-export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
+export function WorkspaceShell(props: { account: () => CentralAuthUser | null }) {
   const platform = usePlatform();
   /** A window that main opened for one chat shows that chat alone, with no rail and no sidebar. */
   const chatWindow = platform.chatWindow !== null;

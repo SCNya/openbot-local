@@ -202,8 +202,9 @@ export function navItem(tab: SettingsTab): SettingsNavItem {
  * Whether the settings panel and its search show the tab. Hosted servers opens from its own entry, not
  * from this panel.
  */
-export function settingsTabShown(tab: SettingsTab, dynamicIslandShown: boolean): boolean {
+export function settingsTabShown(tab: SettingsTab, dynamicIslandShown: boolean, hasAccount: boolean): boolean {
   if (tab === "hosted-servers") return false;
+  if (!hasAccount && (tab === "profile" || tab === "billing" || tab === "mobile-connect")) return false;
   return tab !== "dynamic-island" || dynamicIslandShown;
 }
 

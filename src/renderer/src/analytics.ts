@@ -723,7 +723,9 @@ const UPDATE_PHASES = new Set([
 ]);
 
 function shouldEnableDesktopAnalytics(appInfo: AppInfo, productionBuild: boolean): boolean {
-  return appInfo.analyticsCaptureUrl !== undefined || (productionBuild && appInfo.variant === "production");
+  // OpenBot Local: only a local test capture server receives analytics; production sends nothing.
+  void productionBuild;
+  return appInfo.analyticsCaptureUrl !== undefined;
 }
 
 function sanitizeDesktopAnalyticsEvent(

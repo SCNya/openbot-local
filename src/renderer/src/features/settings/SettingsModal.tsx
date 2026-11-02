@@ -82,7 +82,7 @@ export interface SettingsModalProps {
   onCancelScheduledRestart?: () => Promise<void>;
   onRestartWhenIdle?: () => Promise<void>;
   onCancelIdleRestart?: () => Promise<void>;
-  account: CentralAuthUser;
+  account: CentralAuthUser | null;
   onUpdateAccountName: (name: string) => Promise<void>;
   onUpdateAccountAvatar: (image: AvatarImageInput | null) => Promise<void>;
   onCreateMobileConnect?: () => Promise<MobileConnectTicket>;
@@ -130,14 +130,21 @@ export interface SettingsModalProps {
  */
 export function SettingsModal(props: SettingsModalProps) {
   const i18n = useI18n();
-  const [activeTab, setActiveTab] = createSignal<SettingsTab>(
-    untrack(() => (props.initialTab === "hosted-servers" ? "billing" : props.initialTab)) ?? "general",
-  );
+  const dynamicIslandShown = () => dynamicIslandSettingsShown(props.appInfo?.platform, props.chatWindow === true);
+  function availableTab(tab: SettingsTab | undefined): SettingsTab {
+    const requested = tab === "hosted-servers" ? "billing" : (tab ?? "general");
+    return settingsTabShown(requested, dynamicIslandShown(), Boolean(props.account)) ? requested : "general";
+  }
+  const [activeTab, setActiveTab] = createSignal<SettingsTab>(untrack(() => availableTab(props.initialTab)));
   let modalElement: HTMLElement | undefined;
   const profile = createSettingsProfileStore(props, () => activeTab() === "profile");
   const profileActivity = createProfileActivityStore(
-    () => props.open && activeTab() === "profile",
-    (stats) => renderProfileShareImage(props.account, stats),
+    () => Boolean(props.account) && props.open && activeTab() === "profile",
+    (stats) => {
+      const account = props.account;
+      if (!account) throw new Error(i18n.t("account.login.signInTitle"));
+      return renderProfileShareImage(account, stats);
+    },
   );
   const mobileConnect = createSettingsMobileConnectStore(props, () => activeTab() === "mobile-connect");
   const updates = createSettingsUpdatesStore(props);
@@ -171,11 +178,10 @@ export function SettingsModal(props: SettingsModalProps) {
     },
   );
 
-  const dynamicIslandShown = () => dynamicIslandSettingsShown(props.appInfo?.platform, props.chatWindow === true);
   createEffect(
     () => {
       const tab = props.open ? props.openTab : undefined;
-      return tab === "hosted-servers" ? "billing" : tab;
+      return tab ? availableTab(tab) : undefined;
     },
     (tab) => {
       if (!tab) return;
@@ -183,7 +189,14 @@ export function SettingsModal(props: SettingsModalProps) {
       agents.showList();
     },
   );
-  const visibleNavItems = () => navItems.filter((item) => settingsTabShown(item.value, dynamicIslandShown()));
+  createEffect(
+    () => settingsTabShown(activeTab(), dynamicIslandShown(), Boolean(props.account)),
+    (shown) => {
+      if (!shown) setActiveTab("general");
+    },
+  );
+  const visibleNavItems = () =>
+    navItems.filter((item) => settingsTabShown(item.value, dynamicIslandShown(), Boolean(props.account)));
 
   const title = () => i18n.t(navItem(activeTab()).titleKey);
   const description = () => i18n.t(navItem(activeTab()).descriptionKey);
@@ -205,7 +218,7 @@ export function SettingsModal(props: SettingsModalProps) {
         value === "mobile-connect" ||
         value === "updates"
       ) {
-        setActiveTab(value);
+        setActiveTab(availableTab(value));
       }
     },
     orientation: "vertical" as const,
@@ -348,41 +361,49 @@ export function SettingsModal(props: SettingsModalProps) {
         </Tabs.Content>
 
         <Tabs.Content value="profile" class="settings-modal-tab-panel profile-panel" data-tab="profile">
-          <SettingsProfileTab
-            store={profile}
-            account={props.account}
-            activity={profileActivity}
-            canListSessions={Boolean(props.onListAccountSessions)}
-            canRevokeSession={Boolean(props.onRevokeAccountSession)}
-            onSignOut={props.onSignOut}
-          />
+          <Show when={props.account}>
+            {(account) => (
+              <SettingsProfileTab
+                store={profile}
+                account={account()}
+                activity={profileActivity}
+                canListSessions={Boolean(props.onListAccountSessions)}
+                canRevokeSession={Boolean(props.onRevokeAccountSession)}
+                onSignOut={props.onSignOut}
+              />
+            )}
+          </Show>
         </Tabs.Content>
 
         <Tabs.Content value="billing" class="settings-modal-tab-panel" data-tab="billing">
-          <BillingPanel
-            store={billing}
-            available={Boolean(props.billingApi)}
-            hostedServers={hostedServers}
-            onAddServer={hostedServers.state.available ? props.onAddHostedServer : undefined}
-            license={
-              <LicenseSection
-                store={license}
-                onManagePayment={() => void billing.openPortal({ flow: "manage" })}
-                onContactUs={licenseContactUs(props.onContactUs)}
-              />
-            }
-          />
+          <Show when={props.account}>
+            <BillingPanel
+              store={billing}
+              available={Boolean(props.billingApi)}
+              hostedServers={hostedServers}
+              onAddServer={hostedServers.state.available ? props.onAddHostedServer : undefined}
+              license={
+                <LicenseSection
+                  store={license}
+                  onManagePayment={() => void billing.openPortal({ flow: "manage" })}
+                  onContactUs={licenseContactUs(props.onContactUs)}
+                />
+              }
+            />
+          </Show>
         </Tabs.Content>
 
         <Tabs.Content value="mobile-connect" class="settings-modal-tab-panel" data-tab="mobile-connect">
-          <SettingsMobileConnectTab
-            store={mobileConnect}
-            canCreateTicket={Boolean(props.onCreateMobileConnect)}
-            canCancelTicket={Boolean(props.onCancelMobileConnect)}
-            canManageLink={Boolean(props.onCreateMobileConnectLink && props.onRevokeMobileConnectLink)}
-            canRevokeDevice={Boolean(props.onRevokeMobileConnectedDevice)}
-            canSetRoute={Boolean(props.onSetRemoteNetworkRoute)}
-          />
+          <Show when={props.account}>
+            <SettingsMobileConnectTab
+              store={mobileConnect}
+              canCreateTicket={Boolean(props.onCreateMobileConnect)}
+              canCancelTicket={Boolean(props.onCancelMobileConnect)}
+              canManageLink={Boolean(props.onCreateMobileConnectLink && props.onRevokeMobileConnectLink)}
+              canRevokeDevice={Boolean(props.onRevokeMobileConnectedDevice)}
+              canSetRoute={Boolean(props.onSetRemoteNetworkRoute)}
+            />
+          </Show>
         </Tabs.Content>
 
         <Tabs.Content value="updates" class="settings-modal-tab-panel" data-tab="updates">

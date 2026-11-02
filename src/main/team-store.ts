@@ -389,13 +389,17 @@ export class TeamStore {
     this.#state = null;
   }
 
-  /** Signing out unbinds the host without removing it - signing back in restores it. */
+  /** Signing out keeps a local host without an account active. Account-linked hosts stay stored. */
 
   readonly deactivate = Effect.fn("TeamStore.deactivate")(
     function* (this: TeamStore): Effect.fn.Return<void, RemoteWorkflowError, TeamStoreFiles> {
       const previousState = this.#state;
       const previousAccountId = this.#file.activeAccountId;
-      this.#state = null;
+      this.#state =
+        this.#file.hosts.find((host) => {
+          const owner = hostOwner(host);
+          return owner !== undefined && !owner.accountId && !owner.email;
+        }) ?? null;
       this.#file.activeAccountId = null;
       return yield* Effect.gen({ self: this }, function* () {
         yield* this.#recordActiveAccountEffect();
@@ -487,6 +491,7 @@ export class TeamStore {
       username: string,
       password: string,
     ): Effect.fn.Return<TeamIdentity, RemoteWorkflowError, TeamStoreFiles> {
+      const activeAccountBefore = this.#file.activeAccountId;
       if (this.#state)
         return yield* new RemoteWorkflowError({
           cause: new TeamStoreError(sourceText("error.team.alreadyConfigured")),
@@ -501,6 +506,10 @@ export class TeamStore {
         }),
       );
       const credentials = yield* hashPasswordEffect(password);
+      if (this.#file.activeAccountId !== activeAccountBefore)
+        return yield* new RemoteWorkflowError({
+          cause: new TeamStoreError(sourceText("error.team.accountChangedDuringCreate")),
+        });
       // Hashing yields, so a second request could have configured a host meanwhile.
       if (this.#state)
         return yield* new RemoteWorkflowError({

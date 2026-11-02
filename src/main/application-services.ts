@@ -410,7 +410,7 @@ const HERMES_IMPORT_LINKS_FILE = "openbot-hermes-imports-v1.json";
  * the Electron binary - which is also the name macOS shows in the Privacy & Security panes, and the
  * reason a dev grant does not carry over to a packaged build.
  */
-const PACKAGED_BUNDLE_IDENTIFIER = "app.openbot.desktop";
+const PACKAGED_BUNDLE_IDENTIFIER = "app.openbot.local";
 const DEVELOPMENT_BUNDLE_IDENTIFIER = "com.github.Electron";
 
 const TEARDOWN_ORDER = {
@@ -2663,7 +2663,8 @@ export async function createApplicationServices({
     throw new Error(`Unsupported analytics platform: ${analyticsPlatform}`);
   }
   performance.mark("openbot:services.remote-desktop");
-  const analyticsEnabled = (app.isPackaged && appVariant === "production") || analyticsCaptureUrl !== null;
+  // OpenBot Local: failure reports reach only a local test capture server, never OpenPanel.
+  const analyticsEnabled = analyticsCaptureUrl !== null;
   const failureReports = analyticsEnabled
     ? new ReportQueue(
         fileReportStorage(join(app.getPath("userData"), "openbot-error-reports-v1.json")),
@@ -2995,7 +2996,9 @@ export async function createApplicationServices({
       (process.env.OPENBOT_HOSTED_SERVER === "1" || installationMode === "self") &&
       existsSync(HOSTED_UPDATE_TRIGGER));
   // A local server is the same application as its parent, which installs the update for both.
+  // OpenBot Local: the official updater would replace this build with the upstream one, so it is off.
   const updatesEnabled =
+    false &&
     !localServerChild &&
     app.isPackaged &&
     !isNixStoreInstall() &&

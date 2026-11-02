@@ -38,7 +38,7 @@ export function AppBootstrap() {
     const receiveInvite = (inviteUrl: string) => {
       flush(() => {
         setPendingInviteUrl(inviteUrl);
-        if (setupState()?.completed === true && centralAuth().status === "signed_in") setJoinServerOpen(true);
+        if (centralAuth().status === "signed_in" && setupState()?.completed === true) setJoinServerOpen(true);
       });
     };
     const unsubscribeInvite = appPort().servers.onInvite((inviteUrl) => {

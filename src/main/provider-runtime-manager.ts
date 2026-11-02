@@ -217,7 +217,7 @@ export interface ProviderRuntimeManagerOptions {
 export function providerRuntimeRoot(input: { appData: string; userDataOverride: string }): string {
   const override = input.userDataOverride.trim();
   if (override) return join(resolve(override), "provider-runtimes");
-  return join(input.appData, "OpenBot", "provider-runtimes");
+  return join(input.appData, "OpenBot Local", "provider-runtimes");
 }
 
 export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerEvents> {

@@ -105,7 +105,6 @@ import { voiceIpcHandlers } from "./ipc/voice-handlers";
 import { workflowIpcHandlers } from "./ipc/workflow-handlers";
 import { KeepAwake } from "./keep-awake";
 import { stopAppImageCrashpadHandlerAtExit } from "./linux-appimage-crashpad";
-import { installLinuxDesktopEntry } from "./linux-desktop-entry";
 import { configureLinuxGpu } from "./linux-gpu-mode";
 import { configureLinuxPasswordStore } from "./linux-password-store";
 import { takeLocalServerChildEnvironment } from "./local-server-child";
@@ -229,7 +228,10 @@ if (configureLinuxPasswordStore())
   logger.info(`No Chromium keyring for "${process.env.XDG_CURRENT_DESKTOP ?? ""}"; using gnome-libsecret.`);
 if (commandLineUserDataDirectory) {
   app.setPath("userData", resolve(commandLineUserDataDirectory));
-} else if (!app.isPackaged) {
+} else if (app.isPackaged) {
+  // OpenBot Local keeps its own profile, apart from an installed official OpenBot.
+  app.setPath("userData", join(app.getPath("appData"), "OpenBot Local"));
+} else {
   app.setPath(
     "userData",
     join(
@@ -241,9 +243,9 @@ if (commandLineUserDataDirectory) {
     ),
   );
 }
-app.setName("OpenBot");
+app.setName("OpenBot Local");
 app.enableSandbox();
-if (process.platform === "win32") app.setAppUserModelId("app.openbot.desktop");
+if (process.platform === "win32") app.setAppUserModelId("app.openbot.local");
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 // A second launch exits at once and must not write into the files of the instance that runs.
 if (hasSingleInstanceLock) {
@@ -878,24 +880,8 @@ async function presentApplication(): Promise<void> {
     (policy) => app.setActivationPolicy(policy),
     () => app.dock?.show() ?? Promise.resolve(),
   );
-  // Linux registers the scheme through xdg-settings, which can only name a desktop entry that
-  // exists, so an AppImage writes its own first. On Windows the NSIS installer writes the scheme
-  // (`build/installer.nsh`), and each start writes it again for installs from before that script.
-  // A Windows development build does not register: the handler would be bare `electron.exe`.
-  // A macOS development build does not register either: macOS ignores the path and arguments and
-  // names the `com.github.Electron` bundle, so the link took `openbot://` from an installed
-  // OpenBot and opened some worktree's bare Electron.app. `bun run dev:slack` has a loopback return.
-  await Effect.runPromise(
-    installLinuxDesktopEntry({ platform: process.platform, environment: process.env, iconPath: appIconPath }),
-  );
-  if (
-    process.platform === "linux" ||
-    ((process.platform === "darwin" || process.platform === "win32") && app.isPackaged)
-  ) {
-    if (!app.setAsDefaultProtocolClient("openbot")) {
-      logger.warn("Unable to register the openbot:// scheme. Invitation links will not open OpenBot.");
-    }
-  }
+  // OpenBot Local registers neither the `openbot://` scheme nor a Linux desktop entry: both belong to
+  // an installed official OpenBot, and invitation links need an account anyway.
 }
 
 function centralAuthPrincipalId(state: CentralAuthState): string | null {

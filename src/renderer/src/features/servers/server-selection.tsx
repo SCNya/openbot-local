@@ -1,10 +1,11 @@
 import type { AddedAgent, AgentProviderId, NotificationOpenedEvent, ServerSummary } from "@openbot/contracts/ipc";
 import { currentText } from "@openbot/ui/text";
-import { onSettled } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 import { actionToast } from "../../action-toast";
 import { desktopAnalytics } from "../../analytics";
 import { usePlatform } from "../../platform";
 import { createSimpleContext } from "../../simple-context";
+import { useAuth } from "../account/account-context";
 import { useAgents } from "../agents/agents-context";
 import { useConversationController } from "../conversation/conversation-controller-context";
 import { useDirectMessages } from "../conversation/direct-messages-context";
@@ -37,7 +38,9 @@ import { activeServerId, serversPort } from "./servers-port";
 const ServerSelection = createSimpleContext({
   name: "Server selection",
   init: () => {
-    const { servers, setServers, beginServerSelection } = useServers();
+    const { centralAuth } = useAuth();
+    const { servers, setServers, beginServerSelection, currentServerSelection, activeServer, serversLoaded } =
+      useServers();
     const { pendingInviteUrl, setPendingInviteUrl, saveSetup } = useSetup();
     const { setSkillsMarketplaceOpen } = useSettings();
     const { disconnectRemoteDesktopWorkspace } = useRemoteDesktop();
@@ -52,6 +55,37 @@ const ServerSelection = createSimpleContext({
     const { stopComposerTyping } = useConversationController();
     const { setDirectTyping } = useDirectMessages();
     const { chatWindow } = usePlatform();
+
+    createEffect(
+      () => {
+        const state = centralAuth();
+        if (chatWindow || (state.status !== "signed_out" && state.status !== "error") || !serversLoaded()) return null;
+        if (agentSetupOpen() && creatingAgent()) return null;
+        const server = activeServer();
+        return server?.kind === "remote" && !server.thisComputer ? server.id : null;
+      },
+      (remoteId) => {
+        if (!remoteId) return;
+        let pending = true;
+        const selection = selectServer("local", false);
+        const selectionIsCurrent = currentServerSelection();
+        void selection
+          .catch(() => {
+            actionToast.error(currentText().t("server.select.failedTitle"), {
+              report: { operation: "team", source: "action", cause_code: "unknown" },
+            });
+          })
+          .finally(() => {
+            pending = false;
+          });
+        return () => {
+          if (pending && activeServer()?.id !== "local" && selectionIsCurrent()) {
+            beginServerSelection();
+            setBrowserVisibilitySuspended(false);
+          }
+        };
+      },
+    );
 
     async function selectServer(
       serverId: string,

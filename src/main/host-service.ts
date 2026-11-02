@@ -708,6 +708,22 @@ export class HostService extends EventEmitter<HostEvents> {
 
   readonly configure = Effect.fn("HostService.configure")(
     function* (this: HostService, input: ConfigureHostInput): Effect.fn.Return<HostStatus, RemoteWorkflowError> {
+      if (this.#signedInAccountId() === null) {
+        const identity = yield* this.#options.store.configure(
+          input.serverName,
+          randomBytes(16).toString("hex"),
+          randomBytes(32).toString("hex"),
+        );
+        if (this.#signedInAccountId() !== null) {
+          this.#options.store.unbindActiveHost();
+          this.#publishActiveHost(identity.serverId);
+          return yield* new RemoteWorkflowError({
+            cause: new Error(sourceText("error.team.accountChangedDuringCreate")),
+          });
+        }
+        this.#publishActiveHost(null);
+        return yield* this.updateLocalIdentity(input);
+      }
       const optionalRegisterRemoteHost = this.#options.registerRemoteHost;
       const optionalUpdateRemoteHostLogo = this.#options.updateRemoteHostLogo;
       const account = yield* remoteDecode(() => this.#options.getSignedInUser());
@@ -766,6 +782,19 @@ export class HostService extends EventEmitter<HostEvents> {
         }
       } else if (attempt0.success !== undefined) return attempt0.success;
       return this.getStatus();
+    },
+    (operation) => this.#provide(operation),
+  ).bind(this);
+
+  readonly updateLocalIdentity = Effect.fn("HostService.updateLocalIdentity")(
+    function* (this: HostService, input: UpdateHostIdentityInput): Effect.fn.Return<HostStatus, RemoteWorkflowError> {
+      if (this.#options.store.configured && this.#options.store.getOwnerEmail() === null) {
+        const identity = yield* this.#options.store.updateIdentity(input);
+        this.#publishActiveHost(identity.serverId);
+        this.#api.refreshIdentity();
+        return this.getStatus();
+      }
+      return yield* this.updateIdentity(input);
     },
     (operation) => this.#provide(operation),
   ).bind(this);
@@ -1498,11 +1527,11 @@ export class HostService extends EventEmitter<HostEvents> {
   });
 
   /**
-   * Whether members and invitations live in the account directory. A local development host keeps
+   * Whether members and invitations live in the account directory. A local host without an account keeps
    * them in its own team file, so every read and write of them goes where the others went.
    */
   #usesAccountDirectory(): boolean {
-    return !this.#options.localDevelopmentHost;
+    return !this.#options.localDevelopmentHost && this.#options.store.getOwnerEmail() !== null;
   }
 
   /** The account directory that holds invitations, or `null` for this machine's own team file. */
@@ -1787,14 +1816,22 @@ export class HostService extends EventEmitter<HostEvents> {
   }
 
   #currentAgentReaderId(): string {
-    const accountReaderId = `local-user:${this.#options.getSignedInUser().id}`;
+    let user: CentralAuthUser;
+    try {
+      user = this.#options.getSignedInUser();
+    } catch {
+      return SIGNED_OUT_CHANNEL_MEMBER_ID;
+    }
+    const accountReaderId = `local-user:${user.id}`;
     const memberId = this.#findCurrentMemberId();
     // Channel reads are keyed by the reader id this method answers, so they adopt with it.
     if (!memberId) {
+      this.#options.agents.adoptConversationReads(SIGNED_OUT_CHANNEL_MEMBER_ID, accountReaderId);
       this.#options.channels?.store.adoptReads(SIGNED_OUT_CHANNEL_MEMBER_ID, accountReaderId);
       return accountReaderId;
     }
     this.#options.agents.adoptConversationReads(accountReaderId, memberId);
+    this.#options.agents.adoptConversationReads(SIGNED_OUT_CHANNEL_MEMBER_ID, memberId);
     this.#options.channels?.store.adoptReads(accountReaderId, memberId);
     this.#options.channels?.store.adoptReads(SIGNED_OUT_CHANNEL_MEMBER_ID, memberId);
     return memberId;

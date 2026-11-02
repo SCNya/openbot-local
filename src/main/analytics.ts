@@ -139,6 +139,17 @@ function createOpenPanelClient(options: OpenPanelOptions): HostOpenPanelClient {
   return client;
 }
 
+/** OpenBot Local: only a loopback test receiver (analytics-redaction-e2e) can get analytics events. */
+function isLocalCaptureUrl(value: string | undefined): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
+  } catch {
+    return false;
+  }
+}
+
 export interface HostAnalyticsOptions {
   reports?: ReportQueue;
   enabled: boolean;
@@ -338,7 +349,8 @@ export class HostAnalytics {
     this.#inventoryDayStore = options.inventoryDay;
     this.#resources = options.resources;
     this.#trackingEnabled = options.trackingEnabled ?? true;
-    if (!options.enabled) {
+    // OpenBot Local: product analytics never leave this computer, whatever the setting says.
+    if (!options.enabled || !isLocalCaptureUrl(options.apiUrl)) {
       this.#client = null;
       return;
     }

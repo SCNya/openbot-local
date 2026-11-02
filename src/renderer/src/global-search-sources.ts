@@ -9,6 +9,7 @@ import { useText } from "@openbot/ui/text";
 import { createEffect, createMemo, createSignal } from "solid-js";
 import { formatMessageTime } from "./app-message-projection";
 import { appPort } from "./app-port";
+import { useAuth } from "./features/account/account-context";
 import { useAgents } from "./features/agents/agents-context";
 import { useChannels } from "./features/channels/channels-context";
 import { globalSearchChannels } from "./features/channels/global-search-channels";
@@ -16,7 +17,7 @@ import { activeServerHasProviderSettings, serverCanAdminister } from "./features
 import { useServerSettings } from "./features/servers/server-settings";
 import { useServers } from "./features/servers/servers-context";
 import { useSettings } from "./features/settings/settings-context";
-import { dynamicIslandSettingsShown, navItems } from "./features/settings/settings-tabs";
+import { dynamicIslandSettingsShown, navItems, settingsTabShown } from "./features/settings/settings-tabs";
 import { useUsage } from "./features/usage/usage-context";
 import { useNavigation } from "./navigation";
 import { usePlatform } from "./platform";
@@ -31,6 +32,7 @@ const FILE_SEARCH_LIMIT = 50;
 export function useGlobalSearchSources(open: () => boolean) {
   const { t } = useText();
   const platform = usePlatform();
+  const { signedInAccount } = useAuth();
   const channels = useChannels();
   const { agentList, agentSetupOpen, creatingAgent, openAgentSetup, setSettingsRequest } = useAgents();
   const { selectAgent, globalSearchOpener } = useNavigation();
@@ -149,8 +151,7 @@ export function useGlobalSearchSources(open: () => boolean) {
         });
       }
       for (const item of navItems) {
-        // Hosted servers shows only for an account with hosting, which the dialog checks when it opens.
-        if (item.value === "hosted-servers" || (item.value === "dynamic-island" && !dynamicIslandShown)) continue;
+        if (!settingsTabShown(item.value, dynamicIslandShown, Boolean(signedInAccount()))) continue;
         list.push({
           id: `settings:${item.value}`,
           label: t(item.titleKey),

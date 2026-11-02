@@ -3,6 +3,7 @@ import { Button, Input, Search, Server } from "@openbot/ui";
 import { createSignal, For, flush, Show } from "solid-js";
 import { useI18n } from "../../i18n-context";
 import { usePlatform } from "../../platform";
+import { useAuth } from "../account/account-context";
 import type { ServerSettingsSection } from "../servers/ServerSettingsModal";
 import { activeServerHasProviderSettings, serverSupportsCapability } from "../servers/server-capabilities";
 import { useServerSettings } from "../servers/server-settings";
@@ -76,9 +77,14 @@ export function SettingsPage(props: { kind: SettingsKind }) {
   const serverSettings = useServerSettings();
   const platform = usePlatform();
   const { activeServer } = useServers();
+  const { signedInAccount } = useAuth();
   const [query, setQuery] = createSignal("");
   const tabShown = (tab: SettingsTab) =>
-    settingsTabShown(tab, dynamicIslandSettingsShown(platform.appInfo()?.platform, platform.chatWindow !== null));
+    settingsTabShown(
+      tab,
+      dynamicIslandSettingsShown(platform.appInfo()?.platform, platform.chatWindow !== null),
+      Boolean(signedInAccount()),
+    );
   /** The rows of the tabs shown on this computer, then the sections that the active server's settings show. */
   const searchRows = (): SearchRow[] => {
     const server = activeServer();

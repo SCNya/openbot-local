@@ -102,6 +102,7 @@ export const messages = {
   "error.provider.modelIdCharacter": "В ID модели есть недопустимый символ.",
   "error.provider.modelIdDuplicate": "У двух моделей одинаковый ID.",
   "error.provider.contextWindowInvalid": "Контекстное окно модели должно быть целым числом токенов от {min} до {max}.",
+  "error.provider.maxOutputInvalid": "Максимальный вывод модели должен быть целым числом токенов от {min} до {max}.",
   "error.provider.headersTooMany": "Слишком много заголовков.",
   "error.provider.headerNameCharacter": "В имени заголовка есть символ, недопустимый в HTTP.",
   "error.provider.headerNameTooLong": "Имя заголовка слишком длинное.",
@@ -315,6 +316,8 @@ export const messages = {
   "error.provider.customAgentNoSecureStorage":
     "На этом компьютере нет защищённого хранилища, поэтому значения среды сохранить нельзя. Удалите их и повторите попытку.",
   "error.provider.customAgentNotSaved": "Этот свой агент не сохранён. Обновите список и повторите попытку.",
+  "error.provider.customAgentWorkspaceOnly":
+    "{reason}. Режим «Рабочее пространство» блокирует это. Попробуйте «Полный доступ».",
   "error.provider.customAgentTooMany": "Можно сохранить не более {count} своих агентов.",
   "error.provider.customAgentEnvValueMissing": "Введите значение для {name}.",
   "error.provider.off": "{provider} выключен в OpenBot. Сначала включите его в настройках провайдеров.",

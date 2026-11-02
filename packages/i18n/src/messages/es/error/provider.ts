@@ -107,6 +107,8 @@ export const messages = {
   "error.provider.modelIdDuplicate": "Dos modelos tienen el mismo ID.",
   "error.provider.contextWindowInvalid":
     "La ventana de contexto de un modelo debe ser un número entero de tokens entre {min} y {max}.",
+  "error.provider.maxOutputInvalid":
+    "La salida máxima de un modelo debe ser un número entero de tokens entre {min} y {max}.",
   "error.provider.headersTooMany": "Hay demasiadas cabeceras.",
   "error.provider.headerNameCharacter": "El nombre de una cabecera contiene un carácter que HTTP no permite.",
   "error.provider.headerNameTooLong": "El nombre de una cabecera es demasiado largo.",
@@ -330,6 +332,8 @@ export const messages = {
     "Este equipo no tiene almacenamiento seguro, por lo que no se pueden guardar los valores del entorno. Elimínalos e inténtalo de nuevo.",
   "error.provider.customAgentNotSaved":
     "Este agente personalizado no está guardado. Actualiza la lista e inténtalo de nuevo.",
+  "error.provider.customAgentWorkspaceOnly":
+    "{reason}. «Solo espacio de trabajo» lo bloquea. Prueba «Acceso completo».",
   "error.provider.customAgentTooMany": "Puedes guardar un máximo de {count} agentes personalizados.",
   "error.provider.customAgentEnvValueMissing": "Introduce un valor para {name}.",
   "error.provider.off": "{provider} está desactivado en OpenBot. Actívalo primero en los ajustes de proveedores.",

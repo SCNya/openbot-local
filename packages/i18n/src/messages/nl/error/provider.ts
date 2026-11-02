@@ -101,6 +101,8 @@ export const messages = {
   "error.provider.modelIdDuplicate": "Twee modellen hebben dezelfde ID.",
   "error.provider.contextWindowInvalid":
     "Het contextvenster van een model moet een geheel aantal tokens zijn van {min} tot {max}.",
+  "error.provider.maxOutputInvalid":
+    "De maximale output van een model moet een geheel aantal tokens zijn van {min} tot {max}.",
   "error.provider.headersTooMany": "Er zijn te veel headers.",
   "error.provider.headerNameCharacter": "Een headernaam bevat een teken dat HTTP niet toestaat.",
   "error.provider.headerNameTooLong": "Een headernaam is te lang.",
@@ -321,6 +323,8 @@ export const messages = {
     "Deze computer heeft geen beveiligde opslag, dus omgevingswaarden kunnen niet worden opgeslagen. Verwijder ze en probeer het opnieuw.",
   "error.provider.customAgentNotSaved":
     "Deze aangepaste agent is niet opgeslagen. Vernieuw de lijst en probeer het opnieuw.",
+  "error.provider.customAgentWorkspaceOnly":
+    "{reason}. ‘Alleen werkruimte’ blokkeert dit. Probeer ‘Volledige toegang’.",
   "error.provider.customAgentTooMany": "Je kunt maximaal {count} aangepaste agents opslaan.",
   "error.provider.customAgentEnvValueMissing": "Voer een waarde in voor {name}.",
   "error.provider.off": "{provider} staat uit in OpenBot. Zet het eerst aan in de instellingen voor aanbieders.",

@@ -106,6 +106,8 @@ export const messages = {
   "error.provider.modelIdDuplicate": "Zwei Modelle haben dieselbe ID.",
   "error.provider.contextWindowInvalid":
     "Das Kontextfenster eines Modells muss eine ganze Zahl von Tokens zwischen {min} und {max} sein.",
+  "error.provider.maxOutputInvalid":
+    "Die maximale Ausgabe eines Modells muss eine ganze Zahl von Tokens zwischen {min} und {max} sein.",
   "error.provider.headersTooMany": "Es gibt zu viele Header.",
   "error.provider.headerNameCharacter": "Ein Headername enthält ein Zeichen, das HTTP nicht erlaubt.",
   "error.provider.headerNameTooLong": "Ein Headername ist zu lang.",
@@ -339,6 +341,7 @@ export const messages = {
     "Dieser Computer hat keinen sicheren Speicher. Umgebungswerte können daher nicht gespeichert werden. Entferne sie und versuche es erneut.",
   "error.provider.customAgentNotSaved":
     "Dieser benutzerdefinierte Agent ist nicht gespeichert. Aktualisiere die Liste und versuche es erneut.",
+  "error.provider.customAgentWorkspaceOnly": "{reason}. „Nur Arbeitsbereich“ blockiert das. Versuche „Voller Zugriff“.",
   "error.provider.customAgentTooMany": "Du kannst höchstens {count} benutzerdefinierte Agenten speichern.",
   "error.provider.customAgentEnvValueMissing": "Gib einen Wert für {name} ein.",
   "error.provider.off":

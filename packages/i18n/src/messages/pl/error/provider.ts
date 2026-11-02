@@ -103,6 +103,7 @@ export const messages = {
   "error.provider.modelIdCharacter": "ID modelu zawiera niedozwolony znak.",
   "error.provider.modelIdDuplicate": "Dwa modele mają to samo ID.",
   "error.provider.contextWindowInvalid": "Okno kontekstu modelu musi być liczbą całkowitą tokenów od {min} do {max}.",
+  "error.provider.maxOutputInvalid": "Maksymalne wyjście modelu musi być liczbą całkowitą tokenów od {min} do {max}.",
   "error.provider.headersTooMany": "Jest za dużo nagłówków.",
   "error.provider.headerNameCharacter": "Nazwa nagłówka zawiera znak niedozwolony w HTTP.",
   "error.provider.headerNameTooLong": "Nazwa nagłówka jest za długa.",
@@ -318,6 +319,8 @@ export const messages = {
   "error.provider.customAgentNoSecureStorage":
     "Ten komputer nie ma bezpiecznego magazynu, więc nie można zapisać wartości środowiskowych. Usuń je i spróbuj ponownie.",
   "error.provider.customAgentNotSaved": "Ten własny agent nie jest zapisany. Odśwież listę i spróbuj ponownie.",
+  "error.provider.customAgentWorkspaceOnly":
+    "{reason}. Blokuje to tryb „Tylko obszar roboczy”. Wybierz „Pełny dostęp”.",
   "error.provider.customAgentTooMany": "Możesz zapisać maksymalnie {count} własnych agentów.",
   "error.provider.customAgentEnvValueMissing": "Wpisz wartość dla {name}.",
   "error.provider.off": "Dostawca {provider} jest wyłączony w OpenBot. Najpierw włącz go w ustawieniach dostawców.",

@@ -103,6 +103,7 @@ export const messages = defineMessages("error.provider", {
   "error.provider.modelIdDuplicate": "Two models have the same ID.",
   "error.provider.contextWindowInvalid":
     "A model's context window must be a whole number of tokens from {min} to {max}.",
+  "error.provider.maxOutputInvalid": "A model's max output must be a whole number of tokens from {min} to {max}.",
   "error.provider.headersTooMany": "There are too many headers.",
   "error.provider.headerNameCharacter": "A header name has a character HTTP does not allow.",
   "error.provider.headerNameTooLong": "A header name is too long.",
@@ -312,6 +313,7 @@ export const messages = defineMessages("error.provider", {
   "error.provider.customAgentNoSecureStorage":
     "This computer has no secure storage, so environment values cannot be saved. Remove them and try again.",
   "error.provider.customAgentNotSaved": "This custom agent is not saved. Refresh the list and try again.",
+  "error.provider.customAgentWorkspaceOnly": "{reason}. Workspace only blocks this. Try Full access.",
   "error.provider.customAgentTooMany": "You can save at most {count} custom agents.",
   "error.provider.customAgentEnvValueMissing": "Enter a value for {name}.",
   "error.provider.off": "{provider} is off in OpenBot. Turn it on in provider settings first.",

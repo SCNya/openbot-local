@@ -1,49 +1,39 @@
-From 1621251c99c5586e9934d8545d94a5c6027136d7 Mon Sep 17 00:00:00 2001
-From: SCNya <SCNya@users.noreply.github.com>
-Date: Mon, 2 Nov 2026 15:04:17 +0300
-Subject: [PATCH] OpenBot Local: open the local workspace without an account
+OpenBot Local: open the local workspace without an account
 
-Ports the account-free logic from ocodista/free-openbot (codex/free-openbot) and
-daMustermann/openbotfr onto current upstream main:
-- AppAccessGate opens language step, first run, setup and workspace without sign-in
-- central auth skips /health/live when there is no session
-- analytics and failure reports never leave the computer
-- auto-updates and openbot:// / desktop-entry registration disabled
-- local host/team settings and conversations work without an account
-- account-only settings tabs (profile, billing, phone) hidden; hosted server offers removed
-- appId app.openbot.local, productName OpenBot Local, separate userData
----
- electron-builder.yml                          |  15 +-
- package.json                                  |   4 +-
- .../features/settings/stores/profile-store.ts |  12 +-
- scripts/verify-linux-package.ts               |   8 +-
- src/main/analytics.ts                         |  14 +-
- src/main/application-services.ts              |   7 +-
- src/main/central-auth-manager.ts              |   3 +-
- src/main/host-service.ts                      |  43 +++++-
- src/main/index.ts                             |  30 +---
- src/main/ipc/team-handlers.ts                 |   4 +-
- src/main/provider-runtime-manager.ts          |   2 +-
- src/main/team-store.ts                        |  13 +-
- src/renderer/src/AppView.tsx                  | 137 ++++++-----------
- src/renderer/src/WorkspaceOverlays.tsx        | 145 ++----------------
- src/renderer/src/WorkspaceShell.tsx           |   2 +-
- src/renderer/src/analytics.ts                 |   4 +-
- src/renderer/src/app-bootstrap.tsx            |   2 +-
- src/renderer/src/error-reports.ts             |   3 +-
- .../channels/WorkspaceChannelConversation.tsx |   6 +-
- .../conversation/WorkspaceConversation.tsx    |   4 +-
- .../src/features/servers/server-actions.ts    |  25 +--
- .../src/features/servers/server-scope.tsx     |   6 +-
- .../src/features/servers/server-selection.tsx |  38 ++++-
- .../src/features/settings/SettingsModal.tsx   |  99 +++++++-----
- .../src/features/settings/settings-tabs.ts    |   3 +-
- .../src/features/window/SettingsPage.tsx      |   8 +-
- src/renderer/src/global-search-sources.ts     |   7 +-
- 27 files changed, 292 insertions(+), 352 deletions(-)
+Base: nightly-labs/openbot@0521634a3c80a66759d19ccd6d1d9e6720b5ad79 (main, 0.59.0)
+Apply: git apply --3way no-login.patch
+
+ electron-builder.yml                               |  16 +--
+ package.json                                       |   4 +-
+ .../src/features/settings/stores/profile-store.ts  |  12 +-
+ scripts/verify-linux-package.ts                    |   8 +-
+ src/main/analytics.ts                              |  14 +-
+ src/main/application-services.ts                   |   7 +-
+ src/main/central-auth-manager.ts                   |   3 +-
+ src/main/host-service.ts                           |  43 +++++-
+ src/main/index.ts                                  |  30 ++---
+ src/main/ipc/team-handlers.ts                      |   4 +-
+ src/main/provider-runtime-manager.ts               |   2 +-
+ src/main/team-store.ts                             |  13 +-
+ src/renderer/src/AppView.tsx                       | 137 +++++++------------
+ src/renderer/src/WorkspaceOverlays.tsx             | 145 +++------------------
+ src/renderer/src/WorkspaceShell.tsx                |   2 +-
+ src/renderer/src/analytics.ts                      |   4 +-
+ src/renderer/src/app-bootstrap.tsx                 |   2 +-
+ src/renderer/src/error-reports.ts                  |   3 +-
+ .../channels/WorkspaceChannelConversation.tsx      |   6 +-
+ .../conversation/WorkspaceConversation.tsx         |   4 +-
+ .../src/features/servers/server-actions.ts         |  25 +---
+ src/renderer/src/features/servers/server-scope.tsx |   6 +-
+ .../src/features/servers/server-selection.tsx      |  38 +++++-
+ .../src/features/settings/SettingsModal.tsx        |  99 ++++++++------
+ .../src/features/settings/settings-tabs.ts         |   3 +-
+ src/renderer/src/features/window/SettingsPage.tsx  |   8 +-
+ src/renderer/src/global-search-sources.ts          |   7 +-
+ 27 files changed, 292 insertions(+), 353 deletions(-)
 
 diff --git a/electron-builder.yml b/electron-builder.yml
-index 3238481d4..f653cc639 100644
+index fc133452d..2a1585737 100644
 --- a/electron-builder.yml
 +++ b/electron-builder.yml
 @@ -1,12 +1,8 @@
@@ -73,7 +63,7 @@ index 3238481d4..f653cc639 100644
  files:
    - out/**/*
    - package.json
-@@ -125,7 +121,6 @@ mac:
+@@ -132,7 +128,6 @@ mac:
    darkModeSupport: true
    extendInfo:
      CFBundleIconName: Icon
@@ -81,17 +71,16 @@ index 3238481d4..f653cc639 100644
      NSMicrophoneUsageDescription: OpenBot uses the microphone to transcribe voice prompts locally on this Mac.
      # Computer Use runs the driver as a child process, so macOS asks for both grants in OpenBot's
      # name and shows these sentences. Under the hardened runtime, macOS shows the Automation prompt
-@@ -137,8 +132,7 @@ mac:
-   # No `arch` here: a target's own `arch` list replaces the one given on the command line, so
-   # `--x64` would still build ARM64. With no flag, electron-builder builds for the machine it runs
-   # on. Build one architecture at a time: the voice runtime and remote desktop builds on disk are for the
+@@ -147,7 +142,6 @@ mac:
    # architecture of the machine that made them.
    target:
      - dmg
 -    - zip
  win:
+   icon: build/icon-production.ico
+   extraResources:
 diff --git a/package.json b/package.json
-index 004c452f6..65ca9fb7e 100644
+index cd8cf2152..19c6a5274 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,7 +1,7 @@
@@ -101,7 +90,7 @@ index 004c452f6..65ca9fb7e 100644
 -  "desktopName": "openbot.desktop",
 +  "productName": "OpenBot Local",
 +  "desktopName": "openbot-local.desktop",
-   "version": "0.58.0",
+   "version": "0.59.0",
    "description": "A local-first multi-agent desktop workspace for Codex, Claude, and Grok.",
    "author": {
 diff --git a/packages/ui/src/features/settings/stores/profile-store.ts b/packages/ui/src/features/settings/stores/profile-store.ts
@@ -179,10 +168,10 @@ index 37e1cd3a6..24f847e6e 100644
  }
  
 diff --git a/src/main/analytics.ts b/src/main/analytics.ts
-index 01a55c0e9..f07e21397 100644
+index b0f3e08fd..684ad1dbc 100644
 --- a/src/main/analytics.ts
 +++ b/src/main/analytics.ts
-@@ -139,6 +139,17 @@ function createOpenPanelClient(options: OpenPanelOptions): HostOpenPanelClient {
+@@ -153,6 +153,17 @@ function createOpenPanelClient(options: OpenPanelOptions): HostOpenPanelClient {
    return client;
  }
  
@@ -200,10 +189,10 @@ index 01a55c0e9..f07e21397 100644
  export interface HostAnalyticsOptions {
    reports?: ReportQueue;
    enabled: boolean;
-@@ -338,7 +349,8 @@ export class HostAnalytics {
-     this.#inventoryDayStore = options.inventoryDay;
+@@ -357,7 +368,8 @@ export class HostAnalytics {
      this.#resources = options.resources;
      this.#trackingEnabled = options.trackingEnabled ?? true;
+     this.#install = options.installId ? { id: options.installId, email: null } : null;
 -    if (!options.enabled) {
 +    // OpenBot Local: product analytics never leave this computer, whatever the setting says.
 +    if (!options.enabled || !isLocalCaptureUrl(options.apiUrl)) {
@@ -211,10 +200,10 @@ index 01a55c0e9..f07e21397 100644
        return;
      }
 diff --git a/src/main/application-services.ts b/src/main/application-services.ts
-index df09b3dd0..027827f2f 100644
+index 3524223eb..ded1de3f9 100644
 --- a/src/main/application-services.ts
 +++ b/src/main/application-services.ts
-@@ -410,7 +410,7 @@ const HERMES_IMPORT_LINKS_FILE = "openbot-hermes-imports-v1.json";
+@@ -419,7 +419,7 @@ const HERMES_IMPORT_LINKS_FILE = "openbot-hermes-imports-v1.json";
   * the Electron binary - which is also the name macOS shows in the Privacy & Security panes, and the
   * reason a dev grant does not carry over to a packaged build.
   */
@@ -223,17 +212,17 @@ index df09b3dd0..027827f2f 100644
  const DEVELOPMENT_BUNDLE_IDENTIFIER = "com.github.Electron";
  
  const TEARDOWN_ORDER = {
-@@ -2663,7 +2663,8 @@ export async function createApplicationServices({
+@@ -2724,7 +2724,8 @@ export async function createApplicationServices({
      throw new Error(`Unsupported analytics platform: ${analyticsPlatform}`);
    }
    performance.mark("openbot:services.remote-desktop");
 -  const analyticsEnabled = (app.isPackaged && appVariant === "production") || analyticsCaptureUrl !== null;
 +  // OpenBot Local: failure reports reach only a local test capture server, never OpenPanel.
 +  const analyticsEnabled = analyticsCaptureUrl !== null;
-   const failureReports = analyticsEnabled
-     ? new ReportQueue(
-         fileReportStorage(join(app.getPath("userData"), "openbot-error-reports-v1.json")),
-@@ -2995,7 +2996,9 @@ export async function createApplicationServices({
+   const analyticsInstallId = analyticsEnabled
+     ? await Effect.runPromise(
+         readAnalyticsInstallId(join(app.getPath("userData"), ANALYTICS_INSTALL_ID_FILE), Date.now()),
+@@ -3062,7 +3063,9 @@ export async function createApplicationServices({
        (process.env.OPENBOT_HOSTED_SERVER === "1" || installationMode === "self") &&
        existsSync(HOSTED_UPDATE_TRIGGER));
    // A local server is the same application as its parent, which installs the update for both.
@@ -265,10 +254,10 @@ index 0dcbb9e3a..be71860c1 100644
      }
      const sessionToken = this.#sessionToken;
 diff --git a/src/main/host-service.ts b/src/main/host-service.ts
-index cf3f4af71..3ace8b5aa 100644
+index f1efec3d4..ccf6f100b 100644
 --- a/src/main/host-service.ts
 +++ b/src/main/host-service.ts
-@@ -708,6 +708,22 @@ export class HostService extends EventEmitter<HostEvents> {
+@@ -733,6 +733,22 @@ export class HostService extends EventEmitter<HostEvents> {
  
    readonly configure = Effect.fn("HostService.configure")(
      function* (this: HostService, input: ConfigureHostInput): Effect.fn.Return<HostStatus, RemoteWorkflowError> {
@@ -291,7 +280,7 @@ index cf3f4af71..3ace8b5aa 100644
        const optionalRegisterRemoteHost = this.#options.registerRemoteHost;
        const optionalUpdateRemoteHostLogo = this.#options.updateRemoteHostLogo;
        const account = yield* remoteDecode(() => this.#options.getSignedInUser());
-@@ -770,6 +786,19 @@ export class HostService extends EventEmitter<HostEvents> {
+@@ -795,6 +811,19 @@ export class HostService extends EventEmitter<HostEvents> {
      (operation) => this.#provide(operation),
    ).bind(this);
  
@@ -311,7 +300,7 @@ index cf3f4af71..3ace8b5aa 100644
    readonly updateIdentity = Effect.fn("HostService.updateIdentity")(
      function* (this: HostService, input: UpdateHostIdentityInput): Effect.fn.Return<HostStatus, RemoteWorkflowError> {
        const optionalRegisterRemoteHost = this.#options.registerRemoteHost;
-@@ -1498,11 +1527,11 @@ export class HostService extends EventEmitter<HostEvents> {
+@@ -1607,11 +1636,11 @@ export class HostService extends EventEmitter<HostEvents> {
    });
  
    /**
@@ -325,7 +314,7 @@ index cf3f4af71..3ace8b5aa 100644
    }
  
    /** The account directory that holds invitations, or `null` for this machine's own team file. */
-@@ -1787,14 +1816,22 @@ export class HostService extends EventEmitter<HostEvents> {
+@@ -1896,14 +1925,22 @@ export class HostService extends EventEmitter<HostEvents> {
    }
  
    #currentAgentReaderId(): string {
@@ -350,10 +339,10 @@ index cf3f4af71..3ace8b5aa 100644
      this.#options.channels?.store.adoptReads(SIGNED_OUT_CHANNEL_MEMBER_ID, memberId);
      return memberId;
 diff --git a/src/main/index.ts b/src/main/index.ts
-index f747e4aca..476ea223a 100644
+index efeb2764e..7a39fa4bf 100644
 --- a/src/main/index.ts
 +++ b/src/main/index.ts
-@@ -105,7 +105,6 @@ import { voiceIpcHandlers } from "./ipc/voice-handlers";
+@@ -106,7 +106,6 @@ import { voiceIpcHandlers } from "./ipc/voice-handlers";
  import { workflowIpcHandlers } from "./ipc/workflow-handlers";
  import { KeepAwake } from "./keep-awake";
  import { stopAppImageCrashpadHandlerAtExit } from "./linux-appimage-crashpad";
@@ -361,7 +350,7 @@ index f747e4aca..476ea223a 100644
  import { configureLinuxGpu } from "./linux-gpu-mode";
  import { configureLinuxPasswordStore } from "./linux-password-store";
  import { takeLocalServerChildEnvironment } from "./local-server-child";
-@@ -229,7 +228,10 @@ if (configureLinuxPasswordStore())
+@@ -246,7 +245,10 @@ if (configureLinuxPasswordStore())
    logger.info(`No Chromium keyring for "${process.env.XDG_CURRENT_DESKTOP ?? ""}"; using gnome-libsecret.`);
  if (commandLineUserDataDirectory) {
    app.setPath("userData", resolve(commandLineUserDataDirectory));
@@ -373,7 +362,7 @@ index f747e4aca..476ea223a 100644
    app.setPath(
      "userData",
      join(
-@@ -241,9 +243,9 @@ if (commandLineUserDataDirectory) {
+@@ -258,9 +260,9 @@ if (commandLineUserDataDirectory) {
      ),
    );
  }
@@ -385,7 +374,7 @@ index f747e4aca..476ea223a 100644
  const hasSingleInstanceLock = app.requestSingleInstanceLock();
  // A second launch exits at once and must not write into the files of the instance that runs.
  if (hasSingleInstanceLock) {
-@@ -878,24 +880,8 @@ async function presentApplication(): Promise<void> {
+@@ -923,24 +925,8 @@ async function presentApplication(): Promise<void> {
      (policy) => app.setActivationPolicy(policy),
      () => app.dock?.show() ?? Promise.resolve(),
    );
@@ -441,7 +430,7 @@ index 8f84de5b6..b20d66c3b 100644
  
  export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerEvents> {
 diff --git a/src/main/team-store.ts b/src/main/team-store.ts
-index 3ef845479..28ef7e986 100644
+index f0361a585..b1adf2dfc 100644
 --- a/src/main/team-store.ts
 +++ b/src/main/team-store.ts
 @@ -389,13 +389,17 @@ export class TeamStore {
@@ -484,13 +473,13 @@ index 3ef845479..28ef7e986 100644
        if (this.#state)
          return yield* new RemoteWorkflowError({
 diff --git a/src/renderer/src/AppView.tsx b/src/renderer/src/AppView.tsx
-index 99fe8f4c5..cd6ea000b 100644
+index 72db13f9d..8b08cfa4d 100644
 --- a/src/renderer/src/AppView.tsx
 +++ b/src/renderer/src/AppView.tsx
-@@ -11,37 +11,21 @@ import { useServerSelection } from "./features/servers/server-selection";
- import { useSettings } from "./features/settings/settings-context";
+@@ -12,37 +12,21 @@ import { useSettings } from "./features/settings/settings-context";
  import { StartupSplash } from "./features/startup/StartupSplash";
  import { WhatsNewOverlay } from "./features/updates/WhatsNewOverlay";
+ import { QuitShortcutHint } from "./features/window/QuitShortcutHint";
 -import { useI18n } from "./i18n-context";
 -import { AccountLogin, FirstRunFlow, InitialSetup, LanguageStep } from "./lazy-views";
 +import { FirstRunFlow, InitialSetup, LanguageStep } from "./lazy-views";
@@ -528,7 +517,7 @@ index 99fe8f4c5..cd6ea000b 100644
    const auth = useAuth();
    const setup = useSetup();
    const scope = useServerScope();
-@@ -53,10 +37,8 @@ export function AppAccessGate() {
+@@ -54,10 +38,8 @@ export function AppAccessGate() {
    const started = () => setup.setupLoaded() && platform.appInfo() !== null;
    const [splashShown, setSplashShown] = createSignal(true);
    const languageStep = createLanguageStep();
@@ -541,7 +530,7 @@ index 99fe8f4c5..cd6ea000b 100644
    // A computer signed in before the wheel existed has its language already, so a later sign-out skips the wheel.
    createEffect(
      () => auth.centralAuth().status === "signed_in",
-@@ -73,92 +55,73 @@ export function AppAccessGate() {
+@@ -74,92 +56,73 @@ export function AppAccessGate() {
      <>
        <Show when={started()}>
          <Show
@@ -680,7 +669,7 @@ index 99fe8f4c5..cd6ea000b 100644
          }
        />
 diff --git a/src/renderer/src/WorkspaceOverlays.tsx b/src/renderer/src/WorkspaceOverlays.tsx
-index 013e6f058..cb4934d7c 100644
+index 76e2fc01f..5e67422dd 100644
 --- a/src/renderer/src/WorkspaceOverlays.tsx
 +++ b/src/renderer/src/WorkspaceOverlays.tsx
 @@ -1,10 +1,4 @@
@@ -711,7 +700,7 @@ index 013e6f058..cb4934d7c 100644
  import { remoteMcpSignIn, serverCanAdminister, serverSupportsCapability } from "./features/servers/server-capabilities";
  import { useServerSelection } from "./features/servers/server-selection";
  import { useServerSettings } from "./features/servers/server-settings";
-@@ -63,7 +49,6 @@ import { CreateLocalServerDialog, RemoteDesktopWorkspace, SettingsModal } from "
+@@ -64,7 +50,6 @@ import { CreateLocalServerDialog, RemoteDesktopWorkspace, SettingsModal } from "
  import { useNavigation } from "./navigation";
  import { usePlatform } from "./platform";
  import { useProviders } from "./providers";
@@ -719,7 +708,7 @@ index 013e6f058..cb4934d7c 100644
  import {
    ChannelCreateOverlay,
    GlobalSearchOverlay,
-@@ -74,7 +59,7 @@ import {
+@@ -75,7 +60,7 @@ import {
  } from "./WorkspaceOverlayViews";
  
  interface AccountProps {
@@ -728,7 +717,7 @@ index 013e6f058..cb4934d7c 100644
  }
  
  /**
-@@ -94,8 +79,16 @@ interface AccountProps {
+@@ -95,8 +80,16 @@ interface AccountProps {
   * the components here read the desktop contexts and pass them on.
   */
  export function WorkspaceOverlays(props: AccountProps) {
@@ -745,7 +734,7 @@ index 013e6f058..cb4934d7c 100644
    /* The overlays mount with the app. A first read that failed then must not hide a connector for
       good, and a sign-in can change outside this window, so the Marketplace reads them again when it opens. */
    createEffect(skillsMarketplaceOpen, (open) => {
-@@ -106,9 +99,7 @@ export function WorkspaceOverlays(props: AccountProps) {
+@@ -107,9 +100,7 @@ export function WorkspaceOverlays(props: AccountProps) {
      <>
        <SharedAgentInstall />
        <JoinServer account={props.account} />
@@ -755,7 +744,7 @@ index 013e6f058..cb4934d7c 100644
        <LeaveServer />
        <RestartServer />
        <ServerSettings />
-@@ -212,7 +203,7 @@ function JoinServer(props: AccountProps) {
+@@ -213,7 +204,7 @@ function JoinServer(props: AccountProps) {
      <JoinServerOverlay
        open={joinServerOpen()}
        inviteUrl={setup.pendingInviteUrl()}
@@ -764,7 +753,7 @@ index 013e6f058..cb4934d7c 100644
        onClose={() => {
          setJoinServerOpen(false);
          setup.setPendingInviteUrl("");
-@@ -242,106 +233,6 @@ function CreateLocalServer() {
+@@ -243,106 +234,6 @@ function CreateLocalServer() {
    );
  }
  
@@ -871,7 +860,7 @@ index 013e6f058..cb4934d7c 100644
  /** The leave or owner removal confirmation that the server menu opens. */
  function LeaveServer() {
    const { leaveConfirmServer, leaveRestoreTarget, cancelLeaveServer, leaveConfirmedServer } = useServerSettings();
-@@ -865,7 +756,7 @@ function AppSettings(props: AccountProps) {
+@@ -869,7 +760,7 @@ function AppSettings(props: AccountProps) {
    const auth = useAuth();
    const updates = useUpdates();
    const whatsNew = useWhatsNew();
@@ -880,7 +869,7 @@ index 013e6f058..cb4934d7c 100644
    const {
      appSettingsOpen,
      notificationFocusRequest,
-@@ -922,15 +813,11 @@ function AppSettings(props: AccountProps) {
+@@ -926,15 +817,11 @@ function AppSettings(props: AccountProps) {
          onSetRemoteNetworkRoute={(route) => settingsPort().setRemoteNetworkRoute({ route })}
          onListAccountSessions={auth.listAccountSessions}
          onRevokeAccountSession={auth.revokeAccountSession}
@@ -914,10 +903,10 @@ index e962df007..d20bb5211 100644
    /** A window that main opened for one chat shows that chat alone, with no rail and no sidebar. */
    const chatWindow = platform.chatWindow !== null;
 diff --git a/src/renderer/src/analytics.ts b/src/renderer/src/analytics.ts
-index 8db987417..db598d751 100644
+index 1e556cd3a..bfab7fe42 100644
 --- a/src/renderer/src/analytics.ts
 +++ b/src/renderer/src/analytics.ts
-@@ -723,7 +723,9 @@ const UPDATE_PHASES = new Set([
+@@ -729,7 +729,9 @@ const UPDATE_PHASES = new Set([
  ]);
  
  function shouldEnableDesktopAnalytics(appInfo: AppInfo, productionBuild: boolean): boolean {
@@ -942,10 +931,10 @@ index fbe1bd427..4cf835acb 100644
      };
      const unsubscribeInvite = appPort().servers.onInvite((inviteUrl) => {
 diff --git a/src/renderer/src/error-reports.ts b/src/renderer/src/error-reports.ts
-index bc86d9320..8ed7a90c3 100644
+index a13540442..ca4836b3f 100644
 --- a/src/renderer/src/error-reports.ts
 +++ b/src/renderer/src/error-reports.ts
-@@ -34,7 +34,8 @@ export function configureDesktopReports(
+@@ -42,7 +42,8 @@ export function configureDesktopReports(
    user: Pick<CentralAuthUser, "id" | "email"> | null,
  ): void {
    const capture = info.analyticsCaptureUrl;
@@ -956,10 +945,10 @@ index bc86d9320..8ed7a90c3 100644
      indexedReportStorage("openbot-desktop-error-reports-v1"),
      openPanelTransport({
 diff --git a/src/renderer/src/features/channels/WorkspaceChannelConversation.tsx b/src/renderer/src/features/channels/WorkspaceChannelConversation.tsx
-index be2dcabaf..c3703536a 100644
+index 5059e1bab..78110c120 100644
 --- a/src/renderer/src/features/channels/WorkspaceChannelConversation.tsx
 +++ b/src/renderer/src/features/channels/WorkspaceChannelConversation.tsx
-@@ -27,7 +27,7 @@ import { useChannels } from "./channels-context";
+@@ -28,7 +28,7 @@ import { useChannels } from "./channels-context";
   * browser tabs come from the desktop contexts. Keyed by the channel id: the view reads its channel
   * once, so another channel opens a new view.
   */
@@ -968,7 +957,7 @@ index be2dcabaf..c3703536a 100644
    const channels = useChannels();
    return (
      <Show when={channels.state.selectedId} keyed>
-@@ -36,7 +36,7 @@ export function WorkspaceChannelConversation(props: { account: () => CentralAuth
+@@ -37,7 +37,7 @@ export function WorkspaceChannelConversation(props: { account: () => CentralAuth
    );
  }
  
@@ -977,7 +966,7 @@ index be2dcabaf..c3703536a 100644
    const platform = usePlatform();
    const scope = useServerScope();
    const connectors = useConnectors();
-@@ -111,7 +111,7 @@ function DesktopChannelConversation(props: { channelId: string; account: () => C
+@@ -112,7 +112,7 @@ function DesktopChannelConversation(props: { channelId: string; account: () => C
        browserControlState={browserControlState()}
        server={activeServer()}
        presence={teamPresence()}
@@ -987,10 +976,10 @@ index be2dcabaf..c3703536a 100644
        browserEnabled={!platform.landingPreview && activeServerSupportsCapability("browser-control")}
        openLinksInBrowser={generalSettings().externalLinkTarget.kind === "openbot"}
 diff --git a/src/renderer/src/features/conversation/WorkspaceConversation.tsx b/src/renderer/src/features/conversation/WorkspaceConversation.tsx
-index 369885c51..809c839eb 100644
+index 0e6c167ba..b00645735 100644
 --- a/src/renderer/src/features/conversation/WorkspaceConversation.tsx
 +++ b/src/renderer/src/features/conversation/WorkspaceConversation.tsx
-@@ -70,7 +70,7 @@ import type { ConversationThreads } from "./conversation-types";
+@@ -71,7 +71,7 @@ import type { ConversationThreads } from "./conversation-types";
   * rather than captured once.
   */
  
@@ -999,7 +988,7 @@ index 369885c51..809c839eb 100644
    const scopeIsCurrent = createScopeGuard();
    const serverScope = useServerScope();
    const platform = usePlatform();
-@@ -549,7 +549,7 @@ export function WorkspaceConversation(props: { account: () => CentralAuthUser })
+@@ -556,7 +556,7 @@ export function WorkspaceConversation(props: { account: () => CentralAuthUser })
          browserControlState={browserControlState()}
          server={activeServer()}
          presence={teamPresence()}
@@ -1071,10 +1060,10 @@ index 9c86eb4a6..bf6ba8532 100644
      callbacks,
    };
 diff --git a/src/renderer/src/features/servers/server-scope.tsx b/src/renderer/src/features/servers/server-scope.tsx
-index 4459f3d47..58fa7d213 100644
+index 65bba636a..307690c47 100644
 --- a/src/renderer/src/features/servers/server-scope.tsx
 +++ b/src/renderer/src/features/servers/server-scope.tsx
-@@ -285,11 +285,7 @@ const ServerScope = createSimpleContext({
+@@ -296,11 +296,7 @@ const ServerScope = createSimpleContext({
  
      onSettled(() => {
        const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
@@ -1311,10 +1300,10 @@ index cb2b4ddde..1949ee727 100644
  
          <Tabs.Content value="updates" class="settings-modal-tab-panel" data-tab="updates">
 diff --git a/src/renderer/src/features/settings/settings-tabs.ts b/src/renderer/src/features/settings/settings-tabs.ts
-index 987c5cc7d..3c3719fae 100644
+index 814cd07e5..e24d53b0c 100644
 --- a/src/renderer/src/features/settings/settings-tabs.ts
 +++ b/src/renderer/src/features/settings/settings-tabs.ts
-@@ -202,8 +202,9 @@ export function navItem(tab: SettingsTab): SettingsNavItem {
+@@ -210,8 +210,9 @@ export function navItem(tab: SettingsTab): SettingsNavItem {
   * Whether the settings panel and its search show the tab. Hosted servers opens from its own entry, not
   * from this panel.
   */
@@ -1326,7 +1315,7 @@ index 987c5cc7d..3c3719fae 100644
  }
  
 diff --git a/src/renderer/src/features/window/SettingsPage.tsx b/src/renderer/src/features/window/SettingsPage.tsx
-index 288b9cc51..9e74d7c6f 100644
+index d6d0489ee..e68ad45d8 100644
 --- a/src/renderer/src/features/window/SettingsPage.tsx
 +++ b/src/renderer/src/features/window/SettingsPage.tsx
 @@ -3,6 +3,7 @@ import { Button, Input, Search, Server } from "@openbot/ui";
@@ -1337,7 +1326,7 @@ index 288b9cc51..9e74d7c6f 100644
  import type { ServerSettingsSection } from "../servers/ServerSettingsModal";
  import { activeServerHasProviderSettings, serverSupportsCapability } from "../servers/server-capabilities";
  import { useServerSettings } from "../servers/server-settings";
-@@ -76,9 +77,14 @@ export function SettingsPage(props: { kind: SettingsKind }) {
+@@ -83,9 +84,14 @@ export function SettingsPage(props: { kind: SettingsKind }) {
    const serverSettings = useServerSettings();
    const platform = usePlatform();
    const { activeServer } = useServers();
@@ -1392,6 +1381,3 @@ index c44da77cc..44c3e3a7a 100644
          list.push({
            id: `settings:${item.value}`,
            label: t(item.titleKey),
--- 
-2.47.3
-

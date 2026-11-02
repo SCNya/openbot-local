@@ -103,6 +103,8 @@ export const messages = {
   "error.provider.modelIdDuplicate": "Due modelli hanno lo stesso ID.",
   "error.provider.contextWindowInvalid":
     "La finestra di contesto di un modello deve essere un numero intero di token tra {min} e {max}.",
+  "error.provider.maxOutputInvalid":
+    "L’output massimo di un modello deve essere un numero intero di token tra {min} e {max}.",
   "error.provider.headersTooMany": "Ci sono troppi header.",
   "error.provider.headerNameCharacter": "Il nome di un header contiene un carattere non consentito da HTTP.",
   "error.provider.headerNameTooLong": "Il nome di un header è troppo lungo.",
@@ -324,6 +326,7 @@ export const messages = {
   "error.provider.customAgentNoSecureStorage":
     "Questo computer non ha un archivio sicuro, quindi non si possono salvare i valori d'ambiente. Rimuovili e riprova.",
   "error.provider.customAgentNotSaved": "Questo agente personalizzato non è salvato. Aggiorna l'elenco e riprova.",
+  "error.provider.customAgentWorkspaceOnly": "{reason}. «Solo workspace» lo blocca. Prova «Accesso completo».",
   "error.provider.customAgentTooMany": "Puoi salvare al massimo {count} agenti personalizzati.",
   "error.provider.customAgentEnvValueMissing": "Inserisci un valore per {name}.",
   "error.provider.off": "{provider} è disattivato in OpenBot. Attivalo prima nelle impostazioni dei provider.",

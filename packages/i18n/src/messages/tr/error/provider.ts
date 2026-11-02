@@ -104,6 +104,8 @@ export const messages = {
   "error.provider.modelIdDuplicate": "İki model aynı kimliğe sahip.",
   "error.provider.contextWindowInvalid":
     "Bir modelin bağlam penceresi {min} ile {max} arasında tam sayı bir token sayısı olmalıdır.",
+  "error.provider.maxOutputInvalid":
+    "Bir modelin en fazla çıktısı {min} ile {max} arasında tam sayı bir token sayısı olmalıdır.",
   "error.provider.headersTooMany": "Çok fazla üstbilgi var.",
   "error.provider.headerNameCharacter": "Bir üstbilgi adı HTTP'nin izin vermediği bir karaktere sahip.",
   "error.provider.headerNameTooLong": "Bir üstbilgi adı çok uzun.",
@@ -323,6 +325,8 @@ export const messages = {
   "error.provider.customAgentNoSecureStorage":
     "Bu bilgisayarda güvenli depolama alanı yok, bu nedenle ortam değerleri kaydedilemez. Bunları kaldırıp tekrar deneyin.",
   "error.provider.customAgentNotSaved": "Bu özel ajan kayıtlı değil. Listeyi yenileyip tekrar deneyin.",
+  "error.provider.customAgentWorkspaceOnly":
+    "{reason}. “Yalnızca çalışma alanı” bunu engelliyor. “Tam erişim”i deneyin.",
   "error.provider.customAgentTooMany": "En fazla {count} özel ajan kaydedebilirsiniz.",
   "error.provider.customAgentEnvValueMissing": "{name} için bir değer girin.",
   "error.provider.off": "{provider}, OpenBot'ta kapalı. Önce sağlayıcı ayarlarından açın.",

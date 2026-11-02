@@ -29,7 +29,7 @@ import {
 } from "electron";
 import { runCauseEffect } from "../backend/effect-boundary";
 import { OWNER_NOTIFICATION_KEY } from "./agent-notification-level-store";
-import { readAppVariant, resolveAppIconPath, resolveLogoColorIconPath } from "./app-icon";
+import { readAppVariant, resolveAppIconPath, resolveLogoColorIconPath, resolveMenuBarIconPath } from "./app-icon";
 import { type ApplicationServices, createApplicationServices } from "./application-services";
 import { type BackgroundTray, createBackgroundTray } from "./background-tray";
 import { removeClaudeCodeSessionEnvironment } from "./claude-session-environment";
@@ -78,6 +78,7 @@ import { hostedServerIpcHandlers } from "./ipc/hosted-server-handlers";
 import { hostedSiteIpcHandlers } from "./ipc/hosted-site-handlers";
 import { instanceTransferIpcHandlers } from "./ipc/instance-transfer-handlers";
 import { licenseIpcHandlers } from "./ipc/license-handlers";
+import { linkAccountIpcHandlers } from "./ipc/link-account-handlers";
 import { localServerIpcHandlers } from "./ipc/local-server-handlers";
 import { macAutomationIpcHandlers } from "./ipc/mac-automation-handlers";
 import { marketplaceAgentIpcHandlers } from "./ipc/marketplace-agent-handlers";
@@ -108,12 +109,14 @@ import { stopAppImageCrashpadHandlerAtExit } from "./linux-appimage-crashpad";
 import { configureLinuxGpu } from "./linux-gpu-mode";
 import { configureLinuxPasswordStore } from "./linux-password-store";
 import { takeLocalServerChildEnvironment } from "./local-server-child";
+import { hideMacDockWhenNoWindowShows, setDockIcon, showMacDock } from "./mac-dock";
 import { MacHapticFeedback } from "./mac-haptic-feedback";
 import {
   configureApplicationMenu,
   createMainWindowController,
   createMainWindowHolder,
   hideWindowsForQuit,
+  keepWindowsHidden,
   showMainWindow,
 } from "./main-window";
 import { ensureMacApplicationPresence, secondLaunchResponse } from "./main-window-state";
@@ -123,8 +126,10 @@ import { watchRemoteHostDirectory } from "./remote-server-host-directory";
 import { createRendererForwarders } from "./renderer-forwarders";
 import { sendToRenderer } from "./renderer-ipc";
 import { RoutineWake } from "./routine-wake";
+import { memberAuditName } from "./server-audit-store";
 import { takeServerModeEnvironment } from "./server-mode";
 import { configureContentSecurityPolicy, configureRendererPermissions } from "./session-configuration";
+import { OWNER_PIN_KEY } from "./sidebar-pin-store";
 import { trustSystemCertificates } from "./system-certificates";
 import { TeardownRegistry } from "./teardown-registry";
 import type { TraceFile } from "./trace-file";
@@ -157,13 +162,19 @@ function hideExceptionErrorBox(): void {
   });
 }
 
-type ExitReason = "main_window_closed" | "signal" | "session_end" | "quit";
+/**
+ * `menu` and `shortcut` are the macOS Quit item by click and by `Cmd + Q`, `tray` is the tray item on
+ * Windows and Linux, and `update` is an update install. `quit` is any other request: the Dock, another
+ * app, or a system logout on macOS.
+ */
+type ExitReason = "main_window_closed" | "signal" | "session_end" | "menu" | "shortcut" | "tray" | "update" | "quit";
 let exitRecorded = false;
 
 /**
  * Records once why OpenBot quits, in the main log and in the trace, before the teardown closes the
  * trace. The first reason wins: closing the window then also quits. A process that ends with no such
- * line and no crash dump stopped from outside, such as Task Manager.
+ * line and no crash dump stopped from outside with a signal that cannot be caught, such as SIGKILL or
+ * Task Manager.
  */
 function recordExit(reason: ExitReason): void {
   if (exitRecorded) return;
@@ -172,6 +183,11 @@ function recordExit(reason: ExitReason): void {
   if (!crashTrace) return;
   crashTrace.record({ kind: "exit", name: reason, durationMs: 0, outcome: "requested" });
   Effect.runFork(crashTrace.flush());
+}
+
+function quitFor(reason: ExitReason): void {
+  recordExit(reason);
+  app.quit();
 }
 
 function reportMainProcessFailure(origin: "uncaughtException" | "unhandledRejection", error: unknown): void {
@@ -206,6 +222,7 @@ const serverMode = takeServerModeEnvironment(process.env, app.isPackaged, proces
 const localServerChildEnvironment = takeLocalServerChildEnvironment(process.env, commandLineUserDataDirectory);
 const localServerChild = serverMode || hostedServer ? null : localServerChildEnvironment;
 if (serverMode || hostedServer || localServerChild) hideExceptionErrorBox();
+if (serverMode || hostedServer) keepWindowsHidden();
 // A local server has no window, so it has no Dock tile either.
 if (localServerChild && process.platform === "darwin") app.dock?.hide();
 const inviteLinkOptions = {
@@ -357,13 +374,13 @@ const MAIN_WINDOW_STATE_FILE = "openbot-main-window-state-v1.json";
 
 // A server is stopped with SIGTERM (systemd, Docker). Without a handler, Electron ends at once and its
 // services do not stop. A hosted server's boat pre-stop hook stops it this way before the disk save
-// (`scripts/hosting/openbot-boat-pre-stop`).
-if (!app.isPackaged || hostedServer || serverMode || localServerChild) {
+// (`scripts/hosting/openbot-boat-pre-stop`). The desktop app quits the same way, so a `kill` from a
+// terminal or another app also stops its services and leaves a "Quitting: signal." line (#4149).
+{
   const quitAfterSignal = () => {
-    recordExit("signal");
     // Before `app.quit()`: the same signal can stop the Computer Use driver first.
     quitStarted = true;
-    app.quit();
+    quitFor("signal");
   };
   process.once("SIGINT", quitAfterSignal);
   process.once("SIGTERM", quitAfterSignal);
@@ -401,6 +418,7 @@ const {
   forwardVoiceServerSettings,
   forwardProviderRuntimeStatus,
   forwardGitHubConnectorStatus,
+  forwardLinkAccountStatus,
   forwardOnePasswordConnectorStatus,
   forwardBitwardenConnectorStatus,
   forwardVaultState,
@@ -456,6 +474,7 @@ const windows = createMainWindowController({
     attachQuitOnMainWindowClose(window);
   },
   reportError: (message, error) => logger.error(message, toLogValue(error)),
+  quitFromShortcut: () => quitFor("shortcut"),
 });
 
 let appIconColorImage: NativeImage | undefined;
@@ -480,7 +499,7 @@ function applyAppIconColor(color: AppLogoColor): void {
   );
   if (icon.isEmpty()) return;
   if (process.platform === "darwin") {
-    app.dock?.setIcon(icon);
+    setDockIcon(icon);
     return;
   }
   // A window takes `appIconPath` when it is created, so a window opened after the choice gets the
@@ -490,6 +509,16 @@ function applyAppIconColor(color: AppLogoColor): void {
   appIconColorImage = icon;
   for (const window of BrowserWindow.getAllWindows()) window.setIcon(icon);
   backgroundTray?.setIcon(icon);
+}
+
+/**
+ * The menu bar setting changed. Turned off, it shows the Dock icon again. Turned on while the main
+ * window is closed, it hides the Dock icon. Closing the window and showing it again do the rest.
+ */
+function syncMacDock(menuBar: boolean): void {
+  if (process.platform !== "darwin" || localServerChild) return;
+  if (menuBar) hideMacDockWhenNoWindowShows();
+  else void showMacDock();
 }
 
 /**
@@ -576,6 +605,7 @@ function registerIpcHandlers({
   updater,
   setupFile,
   analyticsPreferences,
+  analyticsInstallId,
   updatePreferenceFile,
   requestedUpdate,
   idleRestart,
@@ -583,6 +613,7 @@ function registerIpcHandlers({
   agentAdminSettings,
   agentHostSettings,
   agentFolders,
+  agentInstructions,
   browserProfiles,
   language,
   logoColor,
@@ -594,6 +625,7 @@ function registerIpcHandlers({
   agentMemoryLimit,
   memoryReview,
   agentAccess,
+  serverAudit,
   teamStore,
   serverTimezone,
   promptCacheTtl,
@@ -606,6 +638,7 @@ function registerIpcHandlers({
   appBehavior,
   agentInitialization,
   sidebarLayout,
+  sidebarPins,
   host,
   remoteDesktop,
   remoteServers,
@@ -613,6 +646,7 @@ function registerIpcHandlers({
   skills,
   hostedSites,
   githubConnector,
+  linkAccount,
   onePasswordConnector,
   bitwardenConnector,
   vault,
@@ -683,6 +717,7 @@ function registerIpcHandlers({
       initializeAgent: () => runCauseEffect(agentInitialization.start()),
       appVariant,
       analyticsCaptureUrl,
+      analyticsInstallId,
       getMainWindow: getDialogParent,
       openChatWindow: windows.openChatWindow,
       chatWindowTargets: windows.chatWindowTargets,
@@ -704,10 +739,11 @@ function registerIpcHandlers({
     ...skillIpcHandlers({ skills, getMainWindow: getDialogParent, translate: language.translate }),
     ...agentFolderIpcHandlers({
       folders: agentFolders,
+      remoteServers,
       getMainWindow: getDialogParent,
       translate: language.translate,
     }),
-    ...agentInstructionsIpcHandlers({ service }),
+    ...agentInstructionsIpcHandlers({ files: agentInstructions, remoteServers }),
     ...hostedSiteIpcHandlers({
       hostedSites,
       remoteServers,
@@ -715,6 +751,7 @@ function registerIpcHandlers({
       translate: language.translate,
     }),
     ...githubConnectorIpcHandlers({ githubConnector, remoteServers, openExternal: openLink }),
+    ...linkAccountIpcHandlers({ linkAccount }),
     ...onePasswordConnectorIpcHandlers({ onePasswordConnector, remoteServers }),
     ...bitwardenConnectorIpcHandlers({ bitwardenConnector, remoteServers }),
     ...vaultIpcHandlers({ vault, getMainWindow: getDialogParent, translate: language.translate, remoteServers }),
@@ -794,8 +831,15 @@ function registerIpcHandlers({
       machineAlerts,
       promptCacheTtl,
       agentAccess,
+      serverAudit,
       localServerId: () => teamStore.getIdentity()?.serverId,
       localAgentIds: () => service.listAgents().map((agent) => agent.id),
+      localOwner: () => {
+        const owner = teamStore.configured
+          ? teamStore.listMembers().find((member) => member.role === "owner")
+          : undefined;
+        return owner ? memberAuditName(owner) : null;
+      },
     }),
     ...providerAdminIpcHandlers({
       service,
@@ -842,6 +886,7 @@ function registerIpcHandlers({
     ...agentIpcHandlers({
       service,
       sidebarLayout,
+      sidebarPins,
       host,
       remoteServers,
       skills,
@@ -1148,7 +1193,7 @@ if (!hasSingleInstanceLock) {
       performance.mark("openbot:when-ready");
       // Set the Dock icon before `dock.show()` below. A development build runs the stock Electron.app,
       // so until this call its Dock tile shows the Electron logo.
-      if (process.platform === "darwin" && !localServerChild) app.dock?.setIcon(appIconPath);
+      if (process.platform === "darwin" && !localServerChild) setDockIcon(appIconPath);
       if (!(await runCauseEffect(hostAllowsTenantLaunch()))) {
         app.quit();
         return;
@@ -1281,6 +1326,11 @@ if (!hasSingleInstanceLock) {
       service.on("workflowRun", (end) => built.analytics.handleWorkflowRun(end));
       built.browser.onSiteVisited((visit) => built.analytics.handleSiteVisit(visit));
       sidebarLayout.on("changed", (layout) => forwardAgentEvent("local", { type: "sidebar-layout-changed", layout }));
+      // A pin from the owner's phone shows at once in the sidebar of this computer.
+      built.sidebarPins.subscribe((key) => {
+        if (key === OWNER_PIN_KEY)
+          forwardAgentEvent("local", { type: "sidebar-pins-changed", ...built.sidebarPins.snapshot(OWNER_PIN_KEY) });
+      });
       built.approvalAutomation.subscribe((preference) => {
         for (const window of BrowserWindow.getAllWindows()) {
           sendToRenderer(window, IPC_ENDPOINTS.app.approvalAutomation, preference);
@@ -1297,6 +1347,7 @@ if (!hasSingleInstanceLock) {
       host.on("directTyping", (event) => forwardDirectTyping("local", event));
       remoteDesktop.on("changed", forwardRemoteDesktopSessions);
       built.githubConnector.onChanged(forwardGitHubConnectorStatus);
+      built.linkAccount.onChanged(forwardLinkAccountStatus);
       built.onePasswordConnector.onChanged(forwardOnePasswordConnectorStatus);
       built.bitwardenConnector.onChanged(forwardBitwardenConnectorStatus);
       built.vault.onChanged(forwardVaultState);
@@ -1361,18 +1412,37 @@ if (!hasSingleInstanceLock) {
       void requestDesktopNotificationPermission(built.notificationPreference, language.translate).catch((error) =>
         logger.warn("Unable to ask for notification permission:", toLogValue(error)),
       );
-      configureApplicationMenu(service, updater, interfaceSize, language.translate, () => windowHolder.current);
-      // The way back to a window hidden in the background on Windows and Linux.
+      configureApplicationMenu(
+        service,
+        updater,
+        interfaceSize,
+        language.translate,
+        () => windowHolder.current,
+        quitFor,
+      );
+      // The way back to a window hidden in the background.
       backgroundTray = createBackgroundTray({
         icon: appIconColorImage ?? nativeImage.createFromPath(appIconPath),
+        menuBarIcon: loadMenuBarIcon(),
         translate: language.translate,
         open: reopenMainWindow,
-        quit: () => app.quit(),
+        quit: () => quitFor("tray"),
       });
       const tray = backgroundTray;
       tray.sync(appBehavior.keepRunningInBackground);
-      const unsubscribeBackgroundTray = appBehavior.subscribe(() => tray.sync(appBehavior.keepRunningInBackground));
+      const unsubscribeBackgroundTray = appBehavior.subscribe(() => {
+        tray.sync(appBehavior.keepRunningInBackground);
+        syncMacDock(appBehavior.keepRunningInBackground);
+      });
+      // The main window hides the Dock icon when it closes, unless another window still shows. When
+      // that last window, such as a chat window, closes later, the Dock icon hides then.
+      const hideDockAfterWindow = (_event: Electron.Event, window: BrowserWindow) =>
+        window.once("closed", () => {
+          if (!isQuitting && appBehavior.keepRunningInBackground) syncMacDock(true);
+        });
+      app.on("browser-window-created", hideDockAfterWindow);
       teardown.push(0, "background tray", () => {
+        app.off("browser-window-created", hideDockAfterWindow);
         unsubscribeBackgroundTray();
         tray.destroy();
       });
@@ -1380,7 +1450,14 @@ if (!hasSingleInstanceLock) {
       // because a native label cannot be changed in place, and every window is told, including the
       // Dynamic Island, which has no Settings of its own to read the new value from.
       language.subscribe((preference) => {
-        configureApplicationMenu(service, updater, interfaceSize, language.translate, () => windowHolder.current);
+        configureApplicationMenu(
+          service,
+          updater,
+          interfaceSize,
+          language.translate,
+          () => windowHolder.current,
+          quitFor,
+        );
         tray.relabel();
         for (const window of BrowserWindow.getAllWindows()) {
           sendToRenderer(window, IPC_ENDPOINTS.app.appLanguagePreference, preference);
@@ -1582,6 +1659,21 @@ app.on("before-quit", (event) => {
   void prepareForShutdown().finally(() => app.quit());
 });
 
+/** Null outside macOS, or when the file is missing: the tray then shows the app icon. */
+function loadMenuBarIcon(): NativeImage | null {
+  if (process.platform !== "darwin") return null;
+  const icon = nativeImage.createFromPath(
+    resolveMenuBarIconPath({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      sourceRoot: resolve(__dirname, "../.."),
+    }),
+  );
+  if (!icon.isEmpty()) return icon;
+  logger.warn("The menu bar icon is missing.");
+  return null;
+}
+
 function reopenMainWindow(): void {
   void windows
     .ensureMainWindow()
@@ -1611,6 +1703,7 @@ function forceExitAfterShutdownDeadline(deadlineMs: number): void {
  * so Squirrel gets that time less the teardown.
  */
 async function prepareForUpdateInstall(deadlineMs = UPDATE_INSTALL_TIMEOUT_MS): Promise<void> {
+  recordExit("update");
   if (services) await runCauseEffect(services.browser.flushPersistentStorage());
   await prepareForShutdown(deadlineMs);
 }

@@ -55,11 +55,12 @@ bun run verify:remote-desktop-runtime
 bun run prepare:cua-driver
 bun run build
 bunx electron-builder --mac --arm64 --publish never \
-  --config.mac.identity=null --config.mac.notarize=false
+  --config.mac.identity=null --config.mac.notarize=false \
+  --config.mac.target=dmg
 
 echo
 echo "==> Done. Artifacts:"
-ls -1 "$WORK_DIR"/dist/*.dmg "$WORK_DIR"/dist/*.zip 2>/dev/null || ls -1 "$WORK_DIR"/dist 2>/dev/null || true
+ls -1 "$WORK_DIR"/dist/*.dmg 2>/dev/null || ls -1 "$WORK_DIR"/dist 2>/dev/null || true
 cat <<'NOTE'
 
 Install: open the .dmg and drag "OpenBot Local" to /Applications.

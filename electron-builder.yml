@@ -135,7 +135,6 @@ mac:
   # architecture of the machine that made them.
   target:
     - dmg
-    - zip
 win:
   icon: build/icon-production.ico
   extraResources:

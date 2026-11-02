@@ -81,6 +81,15 @@ index 3238481d4..f653cc639 100644
      NSMicrophoneUsageDescription: OpenBot uses the microphone to transcribe voice prompts locally on this Mac.
      # Computer Use runs the driver as a child process, so macOS asks for both grants in OpenBot's
      # name and shows these sentences. Under the hardened runtime, macOS shows the Automation prompt
+@@ -137,8 +132,7 @@ mac:
+   # No `arch` here: a target's own `arch` list replaces the one given on the command line, so
+   # `--x64` would still build ARM64. With no flag, electron-builder builds for the machine it runs
+   # on. Build one architecture at a time: the voice runtime and remote desktop builds on disk are for the
+   # architecture of the machine that made them.
+   target:
+     - dmg
+-    - zip
+ win:
 diff --git a/package.json b/package.json
 index 004c452f6..65ca9fb7e 100644
 --- a/package.json

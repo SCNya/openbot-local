@@ -1,0 +1,1388 @@
+From 1621251c99c5586e9934d8545d94a5c6027136d7 Mon Sep 17 00:00:00 2001
+From: SCNya <SCNya@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 15:04:17 +0300
+Subject: [PATCH] OpenBot Local: open the local workspace without an account
+
+Ports the account-free logic from ocodista/free-openbot (codex/free-openbot) and
+daMustermann/openbotfr onto current upstream main:
+- AppAccessGate opens language step, first run, setup and workspace without sign-in
+- central auth skips /health/live when there is no session
+- analytics and failure reports never leave the computer
+- auto-updates and openbot:// / desktop-entry registration disabled
+- local host/team settings and conversations work without an account
+- account-only settings tabs (profile, billing, phone) hidden; hosted server offers removed
+- appId app.openbot.local, productName OpenBot Local, separate userData
+---
+ electron-builder.yml                          |  15 +-
+ package.json                                  |   4 +-
+ .../features/settings/stores/profile-store.ts |  12 +-
+ scripts/verify-linux-package.ts               |   8 +-
+ src/main/analytics.ts                         |  14 +-
+ src/main/application-services.ts              |   7 +-
+ src/main/central-auth-manager.ts              |   3 +-
+ src/main/host-service.ts                      |  43 +++++-
+ src/main/index.ts                             |  30 +---
+ src/main/ipc/team-handlers.ts                 |   4 +-
+ src/main/provider-runtime-manager.ts          |   2 +-
+ src/main/team-store.ts                        |  13 +-
+ src/renderer/src/AppView.tsx                  | 137 ++++++-----------
+ src/renderer/src/WorkspaceOverlays.tsx        | 145 ++----------------
+ src/renderer/src/WorkspaceShell.tsx           |   2 +-
+ src/renderer/src/analytics.ts                 |   4 +-
+ src/renderer/src/app-bootstrap.tsx            |   2 +-
+ src/renderer/src/error-reports.ts             |   3 +-
+ .../channels/WorkspaceChannelConversation.tsx |   6 +-
+ .../conversation/WorkspaceConversation.tsx    |   4 +-
+ .../src/features/servers/server-actions.ts    |  25 +--
+ .../src/features/servers/server-scope.tsx     |   6 +-
+ .../src/features/servers/server-selection.tsx |  38 ++++-
+ .../src/features/settings/SettingsModal.tsx   |  99 +++++++-----
+ .../src/features/settings/settings-tabs.ts    |   3 +-
+ .../src/features/window/SettingsPage.tsx      |   8 +-
+ src/renderer/src/global-search-sources.ts     |   7 +-
+ 27 files changed, 292 insertions(+), 352 deletions(-)
+
+diff --git a/electron-builder.yml b/electron-builder.yml
+index 3238481d4..f653cc639 100644
+--- a/electron-builder.yml
++++ b/electron-builder.yml
+@@ -1,12 +1,8 @@
+-appId: app.openbot.desktop
+-productName: OpenBot
++appId: app.openbot.local
++productName: OpenBot Local
+ copyright: Copyright © 2026 Synthetify Labs spółka z ograniczoną odpowiedzialnością
+-protocols:
+-  - name: OpenBot invitations
+-    schemes:
+-      - openbot
+ asar: true
+-artifactName: ${productName}-${version}-${arch}.${ext}
++artifactName: OpenBot-Local-${version}-${arch}.${ext}
+ electronUpdaterCompatibility: ">=2.16"
+ electronFuses:
+   resetAdHocDarwinSignature: true
+@@ -20,8 +16,8 @@ electronFuses:
+   grantFileProtocolExtraPrivileges: false
+ publish:
+   provider: github
+-  owner: nightly-labs
+-  repo: openbot
++  owner: SCNya
++  repo: openbot-local
+ files:
+   - out/**/*
+   - package.json
+@@ -125,7 +121,6 @@ mac:
+   darkModeSupport: true
+   extendInfo:
+     CFBundleIconName: Icon
+-    ElectronTeamID: ZTRDTUL87R
+     NSMicrophoneUsageDescription: OpenBot uses the microphone to transcribe voice prompts locally on this Mac.
+     # Computer Use runs the driver as a child process, so macOS asks for both grants in OpenBot's
+     # name and shows these sentences. Under the hardened runtime, macOS shows the Automation prompt
+diff --git a/package.json b/package.json
+index 004c452f6..65ca9fb7e 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "openbot",
+-  "productName": "OpenBot",
+-  "desktopName": "openbot.desktop",
++  "productName": "OpenBot Local",
++  "desktopName": "openbot-local.desktop",
+   "version": "0.58.0",
+   "description": "A local-first multi-agent desktop workspace for Codex, Claude, and Grok.",
+   "author": {
+diff --git a/packages/ui/src/features/settings/stores/profile-store.ts b/packages/ui/src/features/settings/stores/profile-store.ts
+index af0b5d140..5cd6860bc 100644
+--- a/packages/ui/src/features/settings/stores/profile-store.ts
++++ b/packages/ui/src/features/settings/stores/profile-store.ts
+@@ -8,7 +8,7 @@ import { currentText } from "../../../text";
+ 
+ interface ProfileStoreProps {
+   open: boolean;
+-  account: CentralAuthUser;
++  account: CentralAuthUser | null;
+   onUpdateAccountName: (name: string) => Promise<void>;
+   onUpdateAccountAvatar: (image: AvatarImageInput | null) => Promise<void>;
+   onListAccountSessions?: () => Promise<AccountSession[]>;
+@@ -61,7 +61,7 @@ export function createSettingsProfileStore(props: ProfileStoreProps, isActive: (
+   let nameInput: HTMLInputElement | undefined;
+   let sessionsRevision = 0;
+ 
+-  const accountName = () => props.account.name?.trim() || props.account.email.split("@")[0] || props.account.email;
++  const accountName = () => props.account?.name?.trim() || props.account?.email.split("@")[0] || "";
+ 
+   async function refreshSessions() {
+     if (!props.onListAccountSessions) return;
+@@ -119,14 +119,14 @@ export function createSettingsProfileStore(props: ProfileStoreProps, isActive: (
+   }
+ 
+   createEffect(
+-    () => ({ open: props.open, active: isActive(), accountId: props.account.id, list: props.onListAccountSessions }),
+-    ({ open, active, list }) => {
++    () => ({ open: props.open, active: isActive(), accountId: props.account?.id, list: props.onListAccountSessions }),
++    ({ open, active, accountId, list }) => {
+       sessionsRevision += 1;
+       setPanels((state) => {
+         state.sessions.items = [];
+         state.sessions.revokingId = null;
+       });
+-      if (open && active && list) void refreshSessions();
++      if (open && active && accountId && list) void refreshSessions();
+       return () => {
+         sessionsRevision += 1;
+       };
+@@ -134,7 +134,7 @@ export function createSettingsProfileStore(props: ProfileStoreProps, isActive: (
+   );
+ 
+   createEffect(
+-    () => props.account.name,
++    () => props.account?.name,
+     () => {
+       const name = untrack(accountName);
+       setPanels((state) => {
+diff --git a/scripts/verify-linux-package.ts b/scripts/verify-linux-package.ts
+index 37e1cd3a6..24f847e6e 100644
+--- a/scripts/verify-linux-package.ts
++++ b/scripts/verify-linux-package.ts
+@@ -168,15 +168,17 @@ if (!isString(packageJson.version)) throw new Error("package.json version is mis
+ const packagedManifest = JSON.parse(await readAsarFile(asarPath, "package.json"));
+ if (!isDynamicRecord(packagedManifest)) throw new Error("The packaged package.json is not a JSON object.");
+ expectEqual(packagedManifest.name, "openbot", "packaged name");
+-expectEqual(packagedManifest.productName, "OpenBot", "packaged product name");
++expectEqual(packagedManifest.productName, "OpenBot Local", "packaged product name");
+ expectEqual(packagedManifest.version, packageJson.version, "packaged version");
+ 
+ await assertElfMachine(executablePath);
+ 
+ const appImages = existsSync("dist") ? await findAppImages() : [];
+ for (const appImage of appImages) {
+-  if (!appImage.startsWith(`OpenBot-${packageJson.version}-`)) {
+-    throw new Error(`Unexpected AppImage name: ${appImage} (expected OpenBot-${packageJson.version}-<arch>.AppImage)`);
++  if (!appImage.startsWith(`OpenBot-Local-${packageJson.version}-`)) {
++    throw new Error(
++      `Unexpected AppImage name: ${appImage} (expected OpenBot-Local-${packageJson.version}-<arch>.AppImage)`,
++    );
+   }
+ }
+ 
+diff --git a/src/main/analytics.ts b/src/main/analytics.ts
+index 01a55c0e9..f07e21397 100644
+--- a/src/main/analytics.ts
++++ b/src/main/analytics.ts
+@@ -139,6 +139,17 @@ function createOpenPanelClient(options: OpenPanelOptions): HostOpenPanelClient {
+   return client;
+ }
+ 
++/** OpenBot Local: only a loopback test receiver (analytics-redaction-e2e) can get analytics events. */
++function isLocalCaptureUrl(value: string | undefined): value is string {
++  if (!value) return false;
++  try {
++    const url = new URL(value);
++    return url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
++  } catch {
++    return false;
++  }
++}
++
+ export interface HostAnalyticsOptions {
+   reports?: ReportQueue;
+   enabled: boolean;
+@@ -338,7 +349,8 @@ export class HostAnalytics {
+     this.#inventoryDayStore = options.inventoryDay;
+     this.#resources = options.resources;
+     this.#trackingEnabled = options.trackingEnabled ?? true;
+-    if (!options.enabled) {
++    // OpenBot Local: product analytics never leave this computer, whatever the setting says.
++    if (!options.enabled || !isLocalCaptureUrl(options.apiUrl)) {
+       this.#client = null;
+       return;
+     }
+diff --git a/src/main/application-services.ts b/src/main/application-services.ts
+index df09b3dd0..027827f2f 100644
+--- a/src/main/application-services.ts
++++ b/src/main/application-services.ts
+@@ -410,7 +410,7 @@ const HERMES_IMPORT_LINKS_FILE = "openbot-hermes-imports-v1.json";
+  * the Electron binary - which is also the name macOS shows in the Privacy & Security panes, and the
+  * reason a dev grant does not carry over to a packaged build.
+  */
+-const PACKAGED_BUNDLE_IDENTIFIER = "app.openbot.desktop";
++const PACKAGED_BUNDLE_IDENTIFIER = "app.openbot.local";
+ const DEVELOPMENT_BUNDLE_IDENTIFIER = "com.github.Electron";
+ 
+ const TEARDOWN_ORDER = {
+@@ -2663,7 +2663,8 @@ export async function createApplicationServices({
+     throw new Error(`Unsupported analytics platform: ${analyticsPlatform}`);
+   }
+   performance.mark("openbot:services.remote-desktop");
+-  const analyticsEnabled = (app.isPackaged && appVariant === "production") || analyticsCaptureUrl !== null;
++  // OpenBot Local: failure reports reach only a local test capture server, never OpenPanel.
++  const analyticsEnabled = analyticsCaptureUrl !== null;
+   const failureReports = analyticsEnabled
+     ? new ReportQueue(
+         fileReportStorage(join(app.getPath("userData"), "openbot-error-reports-v1.json")),
+@@ -2995,7 +2996,9 @@ export async function createApplicationServices({
+       (process.env.OPENBOT_HOSTED_SERVER === "1" || installationMode === "self") &&
+       existsSync(HOSTED_UPDATE_TRIGGER));
+   // A local server is the same application as its parent, which installs the update for both.
++  // OpenBot Local: the official updater would replace this build with the upstream one, so it is off.
+   const updatesEnabled =
++    false &&
+     !localServerChild &&
+     app.isPackaged &&
+     !isNixStoreInstall() &&
+diff --git a/src/main/central-auth-manager.ts b/src/main/central-auth-manager.ts
+index 0dcbb9e3a..be71860c1 100644
+--- a/src/main/central-auth-manager.ts
++++ b/src/main/central-auth-manager.ts
+@@ -52,7 +52,6 @@ import {
+   decodeEmailChallenge,
+   decodeMobileConnectedDevices,
+   decodeMobileConnectLinkResponse,
+-  decodeRecordHealth,
+   decodeRegisteredRemoteHost,
+   decodeRemoteHosts,
+   decodeRemoteInvitePreview,
+@@ -1421,7 +1420,7 @@ export class CentralAuthManager extends EventEmitter<CentralAuthEvents> {
+       logger.warn("The stored account session was not read: secure storage is unavailable.");
+     }
+     if (!this.#sessionToken) {
+-      yield* this.#startupRequestEffect("/health/live", { method: "GET" }, decodeRecordHealth);
++      // OpenBot Local: no session means no account service at all, so start offline without a probe.
+       return this.#setState({ status: "signed_out" });
+     }
+     const sessionToken = this.#sessionToken;
+diff --git a/src/main/host-service.ts b/src/main/host-service.ts
+index cf3f4af71..3ace8b5aa 100644
+--- a/src/main/host-service.ts
++++ b/src/main/host-service.ts
+@@ -708,6 +708,22 @@ export class HostService extends EventEmitter<HostEvents> {
+ 
+   readonly configure = Effect.fn("HostService.configure")(
+     function* (this: HostService, input: ConfigureHostInput): Effect.fn.Return<HostStatus, RemoteWorkflowError> {
++      if (this.#signedInAccountId() === null) {
++        const identity = yield* this.#options.store.configure(
++          input.serverName,
++          randomBytes(16).toString("hex"),
++          randomBytes(32).toString("hex"),
++        );
++        if (this.#signedInAccountId() !== null) {
++          this.#options.store.unbindActiveHost();
++          this.#publishActiveHost(identity.serverId);
++          return yield* new RemoteWorkflowError({
++            cause: new Error(sourceText("error.team.accountChangedDuringCreate")),
++          });
++        }
++        this.#publishActiveHost(null);
++        return yield* this.updateLocalIdentity(input);
++      }
+       const optionalRegisterRemoteHost = this.#options.registerRemoteHost;
+       const optionalUpdateRemoteHostLogo = this.#options.updateRemoteHostLogo;
+       const account = yield* remoteDecode(() => this.#options.getSignedInUser());
+@@ -770,6 +786,19 @@ export class HostService extends EventEmitter<HostEvents> {
+     (operation) => this.#provide(operation),
+   ).bind(this);
+ 
++  readonly updateLocalIdentity = Effect.fn("HostService.updateLocalIdentity")(
++    function* (this: HostService, input: UpdateHostIdentityInput): Effect.fn.Return<HostStatus, RemoteWorkflowError> {
++      if (this.#options.store.configured && this.#options.store.getOwnerEmail() === null) {
++        const identity = yield* this.#options.store.updateIdentity(input);
++        this.#publishActiveHost(identity.serverId);
++        this.#api.refreshIdentity();
++        return this.getStatus();
++      }
++      return yield* this.updateIdentity(input);
++    },
++    (operation) => this.#provide(operation),
++  ).bind(this);
++
+   readonly updateIdentity = Effect.fn("HostService.updateIdentity")(
+     function* (this: HostService, input: UpdateHostIdentityInput): Effect.fn.Return<HostStatus, RemoteWorkflowError> {
+       const optionalRegisterRemoteHost = this.#options.registerRemoteHost;
+@@ -1498,11 +1527,11 @@ export class HostService extends EventEmitter<HostEvents> {
+   });
+ 
+   /**
+-   * Whether members and invitations live in the account directory. A local development host keeps
++   * Whether members and invitations live in the account directory. A local host without an account keeps
+    * them in its own team file, so every read and write of them goes where the others went.
+    */
+   #usesAccountDirectory(): boolean {
+-    return !this.#options.localDevelopmentHost;
++    return !this.#options.localDevelopmentHost && this.#options.store.getOwnerEmail() !== null;
+   }
+ 
+   /** The account directory that holds invitations, or `null` for this machine's own team file. */
+@@ -1787,14 +1816,22 @@ export class HostService extends EventEmitter<HostEvents> {
+   }
+ 
+   #currentAgentReaderId(): string {
+-    const accountReaderId = `local-user:${this.#options.getSignedInUser().id}`;
++    let user: CentralAuthUser;
++    try {
++      user = this.#options.getSignedInUser();
++    } catch {
++      return SIGNED_OUT_CHANNEL_MEMBER_ID;
++    }
++    const accountReaderId = `local-user:${user.id}`;
+     const memberId = this.#findCurrentMemberId();
+     // Channel reads are keyed by the reader id this method answers, so they adopt with it.
+     if (!memberId) {
++      this.#options.agents.adoptConversationReads(SIGNED_OUT_CHANNEL_MEMBER_ID, accountReaderId);
+       this.#options.channels?.store.adoptReads(SIGNED_OUT_CHANNEL_MEMBER_ID, accountReaderId);
+       return accountReaderId;
+     }
+     this.#options.agents.adoptConversationReads(accountReaderId, memberId);
++    this.#options.agents.adoptConversationReads(SIGNED_OUT_CHANNEL_MEMBER_ID, memberId);
+     this.#options.channels?.store.adoptReads(accountReaderId, memberId);
+     this.#options.channels?.store.adoptReads(SIGNED_OUT_CHANNEL_MEMBER_ID, memberId);
+     return memberId;
+diff --git a/src/main/index.ts b/src/main/index.ts
+index f747e4aca..476ea223a 100644
+--- a/src/main/index.ts
++++ b/src/main/index.ts
+@@ -105,7 +105,6 @@ import { voiceIpcHandlers } from "./ipc/voice-handlers";
+ import { workflowIpcHandlers } from "./ipc/workflow-handlers";
+ import { KeepAwake } from "./keep-awake";
+ import { stopAppImageCrashpadHandlerAtExit } from "./linux-appimage-crashpad";
+-import { installLinuxDesktopEntry } from "./linux-desktop-entry";
+ import { configureLinuxGpu } from "./linux-gpu-mode";
+ import { configureLinuxPasswordStore } from "./linux-password-store";
+ import { takeLocalServerChildEnvironment } from "./local-server-child";
+@@ -229,7 +228,10 @@ if (configureLinuxPasswordStore())
+   logger.info(`No Chromium keyring for "${process.env.XDG_CURRENT_DESKTOP ?? ""}"; using gnome-libsecret.`);
+ if (commandLineUserDataDirectory) {
+   app.setPath("userData", resolve(commandLineUserDataDirectory));
+-} else if (!app.isPackaged) {
++} else if (app.isPackaged) {
++  // OpenBot Local keeps its own profile, apart from an installed official OpenBot.
++  app.setPath("userData", join(app.getPath("appData"), "OpenBot Local"));
++} else {
+   app.setPath(
+     "userData",
+     join(
+@@ -241,9 +243,9 @@ if (commandLineUserDataDirectory) {
+     ),
+   );
+ }
+-app.setName("OpenBot");
++app.setName("OpenBot Local");
+ app.enableSandbox();
+-if (process.platform === "win32") app.setAppUserModelId("app.openbot.desktop");
++if (process.platform === "win32") app.setAppUserModelId("app.openbot.local");
+ const hasSingleInstanceLock = app.requestSingleInstanceLock();
+ // A second launch exits at once and must not write into the files of the instance that runs.
+ if (hasSingleInstanceLock) {
+@@ -878,24 +880,8 @@ async function presentApplication(): Promise<void> {
+     (policy) => app.setActivationPolicy(policy),
+     () => app.dock?.show() ?? Promise.resolve(),
+   );
+-  // Linux registers the scheme through xdg-settings, which can only name a desktop entry that
+-  // exists, so an AppImage writes its own first. On Windows the NSIS installer writes the scheme
+-  // (`build/installer.nsh`), and each start writes it again for installs from before that script.
+-  // A Windows development build does not register: the handler would be bare `electron.exe`.
+-  // A macOS development build does not register either: macOS ignores the path and arguments and
+-  // names the `com.github.Electron` bundle, so the link took `openbot://` from an installed
+-  // OpenBot and opened some worktree's bare Electron.app. `bun run dev:slack` has a loopback return.
+-  await Effect.runPromise(
+-    installLinuxDesktopEntry({ platform: process.platform, environment: process.env, iconPath: appIconPath }),
+-  );
+-  if (
+-    process.platform === "linux" ||
+-    ((process.platform === "darwin" || process.platform === "win32") && app.isPackaged)
+-  ) {
+-    if (!app.setAsDefaultProtocolClient("openbot")) {
+-      logger.warn("Unable to register the openbot:// scheme. Invitation links will not open OpenBot.");
+-    }
+-  }
++  // OpenBot Local registers neither the `openbot://` scheme nor a Linux desktop entry: both belong to
++  // an installed official OpenBot, and invitation links need an account anyway.
+ }
+ 
+ function centralAuthPrincipalId(state: CentralAuthState): string | null {
+diff --git a/src/main/ipc/team-handlers.ts b/src/main/ipc/team-handlers.ts
+index 479f7009b..c2d6f10e6 100644
+--- a/src/main/ipc/team-handlers.ts
++++ b/src/main/ipc/team-handlers.ts
+@@ -152,7 +152,9 @@ export function teamIpcHandlers({
+     host: {
+       getStatus: handler(() => host.getStatus()),
+       configure: payloadHandler(parseHostConfig, (config) => runCauseEffect(host.configure(config))),
+-      updateIdentity: payloadHandler(parseHostIdentity, (identity) => runCauseEffect(host.updateIdentity(identity))),
++      updateIdentity: payloadHandler(parseHostIdentity, (identity) =>
++        runCauseEffect(host.updateLocalIdentity(identity)),
++      ),
+       rotateIdentityKey: handler(() => runCauseEffect(host.rotateIdentityKey())),
+       getPresence: handler(() => host.getPresence()),
+       start: handler(() => runCauseEffect(host.start())),
+diff --git a/src/main/provider-runtime-manager.ts b/src/main/provider-runtime-manager.ts
+index 8f84de5b6..b20d66c3b 100644
+--- a/src/main/provider-runtime-manager.ts
++++ b/src/main/provider-runtime-manager.ts
+@@ -217,7 +217,7 @@ export interface ProviderRuntimeManagerOptions {
+ export function providerRuntimeRoot(input: { appData: string; userDataOverride: string }): string {
+   const override = input.userDataOverride.trim();
+   if (override) return join(resolve(override), "provider-runtimes");
+-  return join(input.appData, "OpenBot", "provider-runtimes");
++  return join(input.appData, "OpenBot Local", "provider-runtimes");
+ }
+ 
+ export class ProviderRuntimeManager extends EventEmitter<ProviderRuntimeManagerEvents> {
+diff --git a/src/main/team-store.ts b/src/main/team-store.ts
+index 3ef845479..28ef7e986 100644
+--- a/src/main/team-store.ts
++++ b/src/main/team-store.ts
+@@ -389,13 +389,17 @@ export class TeamStore {
+     this.#state = null;
+   }
+ 
+-  /** Signing out unbinds the host without removing it - signing back in restores it. */
++  /** Signing out keeps a local host without an account active. Account-linked hosts stay stored. */
+ 
+   readonly deactivate = Effect.fn("TeamStore.deactivate")(
+     function* (this: TeamStore): Effect.fn.Return<void, RemoteWorkflowError, TeamStoreFiles> {
+       const previousState = this.#state;
+       const previousAccountId = this.#file.activeAccountId;
+-      this.#state = null;
++      this.#state =
++        this.#file.hosts.find((host) => {
++          const owner = hostOwner(host);
++          return owner !== undefined && !owner.accountId && !owner.email;
++        }) ?? null;
+       this.#file.activeAccountId = null;
+       return yield* Effect.gen({ self: this }, function* () {
+         yield* this.#recordActiveAccountEffect();
+@@ -487,6 +491,7 @@ export class TeamStore {
+       username: string,
+       password: string,
+     ): Effect.fn.Return<TeamIdentity, RemoteWorkflowError, TeamStoreFiles> {
++      const activeAccountBefore = this.#file.activeAccountId;
+       if (this.#state)
+         return yield* new RemoteWorkflowError({
+           cause: new TeamStoreError(sourceText("error.team.alreadyConfigured")),
+@@ -501,6 +506,10 @@ export class TeamStore {
+         }),
+       );
+       const credentials = yield* hashPasswordEffect(password);
++      if (this.#file.activeAccountId !== activeAccountBefore)
++        return yield* new RemoteWorkflowError({
++          cause: new TeamStoreError(sourceText("error.team.accountChangedDuringCreate")),
++        });
+       // Hashing yields, so a second request could have configured a host meanwhile.
+       if (this.#state)
+         return yield* new RemoteWorkflowError({
+diff --git a/src/renderer/src/AppView.tsx b/src/renderer/src/AppView.tsx
+index 99fe8f4c5..cd6ea000b 100644
+--- a/src/renderer/src/AppView.tsx
++++ b/src/renderer/src/AppView.tsx
+@@ -11,37 +11,21 @@ import { useServerSelection } from "./features/servers/server-selection";
+ import { useSettings } from "./features/settings/settings-context";
+ import { StartupSplash } from "./features/startup/StartupSplash";
+ import { WhatsNewOverlay } from "./features/updates/WhatsNewOverlay";
+-import { useI18n } from "./i18n-context";
+-import { AccountLogin, FirstRunFlow, InitialSetup, LanguageStep } from "./lazy-views";
++import { FirstRunFlow, InitialSetup, LanguageStep } from "./lazy-views";
+ import { usePlatform } from "./platform";
+ import { WorkspaceShell } from "./WorkspaceShell";
+ 
+-/** The placeholder every lazy view below falls back to while its code loads. */
+ function LoadingScreen() {
+   const { t } = useText();
+   return <div class="initial-setup-screen" role="status" aria-label={t("app.loading")} />;
+ }
+ 
+ /**
+- * Which of four things the window shows: the startup splash until the build and
+- * the saved setup are known, the sign-in screen (after the language wheel on a
+- * computer that has not passed it), one of the two first-run flows, or the
+- * workspace. The splash stays over the next screen until it fades out.
+- *
+- * The ladder is written as nested `<Show>` rather than pushed into the providers
+- * as readiness gates. A gated provider withholds its subtree, and the only
+- * subtree here is the whole application, so a gate would replace these
+- * placeholders with a blank window and serialize the bootstrap loads that
+- * currently run in parallel. See `app-providers.tsx`.
+- *
+- * `account` is threaded down as an accessor because the innermost `<Show>` is
+- * what proves it non-null; the workspace and its overlays need the account, and
+- * re-reading `signedInAccount()` below would hand them a nullable value the
+- * gate has already ruled out.
++ * OpenBot Local: the workspace, first run and setup open without an account. The sign-in screen is
++ * never shown at start; a signed-in account (from an earlier session) is still used when present.
+  */
+ export function AppAccessGate() {
+   const platform = usePlatform();
+-  const i18n = useI18n();
+   const auth = useAuth();
+   const setup = useSetup();
+   const scope = useServerScope();
+@@ -53,10 +37,8 @@ export function AppAccessGate() {
+   const started = () => setup.setupLoaded() && platform.appInfo() !== null;
+   const [splashShown, setSplashShown] = createSignal(true);
+   const languageStep = createLanguageStep();
+-  // Only a settled sign-out: a code in flight or a retry keeps the sign-in screen it belongs to.
+-  // The language button reopens the wheel from an error too, so that state does not hide it.
+-  const languageStepShown = () =>
+-    !languageStep.done() && (languageStep.reopened() || auth.centralAuth().status === "signed_out");
++  const account = auth.visibleSignedInAccount;
++  const languageStepShown = () => !account() && !languageStep.done();
+   // A computer signed in before the wheel existed has its language already, so a later sign-out skips the wheel.
+   createEffect(
+     () => auth.centralAuth().status === "signed_in",
+@@ -73,92 +55,73 @@ export function AppAccessGate() {
+     <>
+       <Show when={started()}>
+         <Show
+-          when={auth.visibleSignedInAccount()}
++          when={!languageStepShown()}
+           fallback={
+             <Loading fallback={<LoadingScreen />}>
+-              <Show
+-                when={languageStepShown()}
+-                fallback={
+-                  <AccountLogin
+-                    variant={platform.appInfo()?.variant ?? "production"}
+-                    state={auth.centralAuth()}
+-                    onRetry={auth.retryCentralAccount}
+-                    onRequestEmailCode={auth.requestEmailCode}
+-                    onVerifyEmailCode={auth.verifyEmailCode}
+-                    onReset={auth.logoutCentralAccount}
+-                    language={i18n.locale()}
+-                    onChangeLanguage={languageStep.reopen}
+-                  />
+-                }
+-              >
+-                <LanguageStep
+-                  variant={platform.appInfo()?.variant ?? "production"}
+-                  reopened={languageStep.reopened()}
+-                  onDone={languageStep.complete}
+-                />
+-              </Show>
++              <LanguageStep
++                variant={platform.appInfo()?.variant ?? "production"}
++                reopened={languageStep.reopened()}
++                onDone={languageStep.complete}
++              />
+             </Loading>
+           }
+         >
+-          {(account) => (
+-            <Show
+-              when={setup.setupState()?.completed}
+-              fallback={
+-                <Show when={scope.connection.hasContent} fallback={<WorkspaceShell account={account} />}>
+-                  <Show when={!setup.setupReadFailed()} fallback={<SetupReadError />}>
+-                    <Show
+-                      when={setup.pendingInviteUrl().trim()}
+-                      fallback={
+-                        <Loading fallback={<LoadingScreen />}>
+-                          <FirstRunFlow
+-                            {...setupProviders}
+-                            state={
+-                              setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }
+-                            }
+-                            platform={platform.appInfo()?.platform ?? "darwin"}
+-                            onSave={setup.saveSetup}
+-                            onAnalyticsChoice={(enabled, chosen) =>
+-                              settings.updateGeneralSettings(
+-                                { ...settings.generalSettings(), productAnalytics: enabled },
+-                                { analyticsChosen: chosen },
+-                              )
+-                            }
+-                            onProviderStepShown={detection.scanOnce}
+-                            logoVariant={platform.appInfo()?.variant ?? "production"}
+-                          />
+-                        </Loading>
+-                      }
+-                    >
++          <Show
++            when={setup.setupState()?.completed}
++            fallback={
++              <Show when={scope.connection.hasContent} fallback={<WorkspaceShell account={account} />}>
++                <Show when={!setup.setupReadFailed()} fallback={<SetupReadError />}>
++                  <Show
++                    when={setup.pendingInviteUrl().trim() && account()}
++                    fallback={
+                       <Loading fallback={<LoadingScreen />}>
+-                        <InitialSetup
++                        <FirstRunFlow
+                           {...setupProviders}
+                           state={
+                             setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }
+                           }
+                           platform={platform.appInfo()?.platform ?? "darwin"}
+-                          accountEmail={account().email}
+-                          inviteUrl={setup.pendingInviteUrl()}
+                           onSave={setup.saveSetup}
+-                          onPreviewInvite={setup.previewInvite}
+-                          onJoinRemote={joinRemoteDuringSetup}
+-                          onLogout={auth.logoutCentralAccount}
++                          onAnalyticsChoice={(enabled, chosen) =>
++                            settings.updateGeneralSettings(
++                              { ...settings.generalSettings(), productAnalytics: enabled },
++                              { analyticsChosen: chosen },
++                            )
++                          }
++                          onProviderStepShown={detection.scanOnce}
++                          logoVariant={platform.appInfo()?.variant ?? "production"}
+                         />
+                       </Loading>
+-                    </Show>
++                    }
++                  >
++                    <Loading fallback={<LoadingScreen />}>
++                      <InitialSetup
++                        {...setupProviders}
++                        state={
++                          setup.setupState() ?? { completed: false, preferredProvider: null, preferredModel: null }
++                        }
++                        platform={platform.appInfo()?.platform ?? "darwin"}
++                        accountEmail={account()?.email ?? ""}
++                        inviteUrl={setup.pendingInviteUrl()}
++                        onSave={setup.saveSetup}
++                        onPreviewInvite={setup.previewInvite}
++                        onJoinRemote={joinRemoteDuringSetup}
++                        onLogout={auth.logoutCentralAccount}
++                      />
++                    </Loading>
+                   </Show>
+                 </Show>
+-              }
+-            >
+-              <WorkspaceShell account={account} />
+-            </Show>
+-          )}
++              </Show>
++            }
++          >
++            <WorkspaceShell account={account} />
++          </Show>
+         </Show>
+       </Show>
+       <WhatsNewOverlay
+         ready={
+           !platform.chatWindow &&
+           !splashShown() &&
+-          !!auth.visibleSignedInAccount() &&
+           (setup.setupState()?.completed === true || !scope.connection.hasContent)
+         }
+       />
+diff --git a/src/renderer/src/WorkspaceOverlays.tsx b/src/renderer/src/WorkspaceOverlays.tsx
+index 013e6f058..cb4934d7c 100644
+--- a/src/renderer/src/WorkspaceOverlays.tsx
++++ b/src/renderer/src/WorkspaceOverlays.tsx
+@@ -1,10 +1,4 @@
+-import {
+-  type CentralAuthUser,
+-  LOCAL_SERVER_ID,
+-  LOCAL_SERVER_LIMIT,
+-  type RoutineFields,
+-  type ServerSummary,
+-} from "@openbot/contracts/ipc";
++import { type CentralAuthUser, LOCAL_SERVER_LIMIT, type ServerSummary } from "@openbot/contracts/ipc";
+ import { BROWSER_PROFILES_CAPABILITY } from "@openbot/contracts/team-protocol/browser-profiles-v1";
+ import { VAULT_CAPABILITY } from "@openbot/contracts/team-protocol/vault-v1";
+ import { VAULT_V2_CAPABILITY } from "@openbot/contracts/team-protocol/vault-v2";
+@@ -34,15 +28,7 @@ import { useProviderDetection } from "./features/custom-providers/provider-detec
+ import type { ServerStorageOptions } from "./features/files/ServerStoragePanel";
+ import { useSetup } from "./features/onboarding/onboarding-context";
+ import { useRemoteDesktop } from "./features/remote-desktop/remote-desktop-context";
+-import { desktopScheduleSource } from "./features/schedule/schedule-port";
+-import { AddServerOverlay } from "./features/servers/AddServerOverlay";
+-import {
+-  createdRoutines,
+-  HostedServerUpsell,
+-  hostedUpsellRoutineCreated,
+-} from "./features/servers/hosted-server-upsell-controller";
+ import { mcpToolRuntimeNote } from "./features/servers/mcp-servers";
+-import { useServerActions } from "./features/servers/server-actions";
+ import { remoteMcpSignIn, serverCanAdminister, serverSupportsCapability } from "./features/servers/server-capabilities";
+ import { useServerSelection } from "./features/servers/server-selection";
+ import { useServerSettings } from "./features/servers/server-settings";
+@@ -63,7 +49,6 @@ import { CreateLocalServerDialog, RemoteDesktopWorkspace, SettingsModal } from "
+ import { useNavigation } from "./navigation";
+ import { usePlatform } from "./platform";
+ import { useProviders } from "./providers";
+-import { useTurns } from "./turns";
+ import {
+   ChannelCreateOverlay,
+   GlobalSearchOverlay,
+@@ -74,7 +59,7 @@ import {
+ } from "./WorkspaceOverlayViews";
+ 
+ interface AccountProps {
+-  account: () => CentralAuthUser;
++  account: () => CentralAuthUser | null;
+ }
+ 
+ /**
+@@ -94,8 +79,16 @@ interface AccountProps {
+  * the components here read the desktop contexts and pass them on.
+  */
+ export function WorkspaceOverlays(props: AccountProps) {
++  const { joinServerOpen, setJoinServerOpen } = useServers();
+   const { skillsMarketplaceOpen } = useSettings();
+   const connectors = useConnectors();
++  createEffect(
++    () => !props.account() && joinServerOpen(),
++    (requiresAccount) => {
++      if (!requiresAccount) return;
++      setJoinServerOpen(false);
++    },
++  );
+   /* The overlays mount with the app. A first read that failed then must not hide a connector for
+      good, and a sign-in can change outside this window, so the Marketplace reads them again when it opens. */
+   createEffect(skillsMarketplaceOpen, (open) => {
+@@ -106,9 +99,7 @@ export function WorkspaceOverlays(props: AccountProps) {
+     <>
+       <SharedAgentInstall />
+       <JoinServer account={props.account} />
+-      <AddServer />
+       <CreateLocalServer />
+-      <HostedUpsell account={props.account} />
+       <LeaveServer />
+       <RestartServer />
+       <ServerSettings />
+@@ -212,7 +203,7 @@ function JoinServer(props: AccountProps) {
+     <JoinServerOverlay
+       open={joinServerOpen()}
+       inviteUrl={setup.pendingInviteUrl()}
+-      accountEmail={props.account().email}
++      accountEmail={props.account()?.email ?? ""}
+       onClose={() => {
+         setJoinServerOpen(false);
+         setup.setPendingInviteUrl("");
+@@ -242,106 +233,6 @@ function CreateLocalServer() {
+   );
+ }
+ 
+-/** A hosted server: the plans, the payment, then the setup. */
+-function AddServer() {
+-  const { servers, addServerOpen, addServerEntryPoint, setAddServerOpen, setJoinServerOpen } = useServers();
+-  const { select, createLocal } = useServerActions();
+-  const { openAppSettings } = useSettings();
+-  const onCreateLocal =
+-    createLocal &&
+-    (() => {
+-      setAddServerOpen(false);
+-      createLocal();
+-    });
+-
+-  return (
+-    <AddServerOverlay
+-      open={addServerOpen()}
+-      entryPoint={addServerEntryPoint() ?? undefined}
+-      calls={appPort().hostedServers}
+-      license={appPort().license}
+-      servers={servers()}
+-      onClose={() => setAddServerOpen(false)}
+-      onOpenServer={(serverId) => {
+-        setAddServerOpen(false);
+-        void select(serverId);
+-      }}
+-      onContactUs={() => void appPort().openExternal("hosted-server-contact")}
+-      onJoinWithInvite={() => {
+-        setAddServerOpen(false);
+-        setJoinServerOpen(true);
+-      }}
+-      onCreateLocal={onCreateLocal}
+-      onManageServers={() => openAppSettings(null, "hosted-servers")}
+-    />
+-  );
+-}
+-
+-/**
+- * The offer of a hosted server when routines depend on this computer or on the user's own remote
+- * computer. The modal opens only after the first routine on this computer, when the turn of the agent
+- * that made it ends.
+- */
+-function HostedUpsell(props: AccountProps) {
+-  const { activeServer, hostedServersAvailable, hostedServersLoaded, hostedServerIds, setAddServerOpen } = useServers();
+-  const { activeTurns, routinesByConversation } = useTurns();
+-  const platform = usePlatform();
+-  // The last current list of each conversation. A list that is loading again keeps the previous one.
+-  const seen = new Map<string, readonly RoutineFields[]>();
+-  createEffect(routinesByConversation, (snapshots) => {
+-    for (const [key, snapshot] of Object.entries(snapshots)) {
+-      if (!snapshot?.current || seen.get(key) === snapshot.routines) continue;
+-      const created = createdRoutines(seen.get(key), snapshot.routines);
+-      seen.set(key, snapshot.routines);
+-      const agentId = key.slice(key.indexOf("\0") + 1);
+-      for (const routine of created) {
+-        hostedUpsellRoutineCreated({ id: routine.id, name: routine.name, agentId });
+-      }
+-    }
+-  });
+-  // Named functions, not conditional props: the controller reads these props in an effect callback,
+-  // where the memo of a conditional prop halts the renderer.
+-  function canOfferHostedServer(): boolean {
+-    return (
+-      !platform.landingPreview &&
+-      hostedServersAvailable() &&
+-      hostedServersLoaded() &&
+-      hostedServerIds().size === 0 &&
+-      (activeServer()?.kind === "local" || activeServer()?.role === "owner") &&
+-      activeServer()?.hosted !== true
+-    );
+-  }
+-  function upsellServerId(): string {
+-    return activeServer()?.id ?? "local";
+-  }
+-  function upsellHost() {
+-    const server = activeServer();
+-    return server?.kind === "remote" ? { name: server.name ?? "" } : ("this-computer" as const);
+-  }
+-  // The calendar lists every routine of the host. A range in the future reads no run history.
+-  function localActiveRoutineIds(): Promise<readonly string[] | null> {
+-    if (untrack(activeServer)?.kind !== "local") return Promise.resolve(null);
+-    const from = Date.now() + 60_000;
+-    return desktopScheduleSource()
+-      .calendar({ from: new Date(from).toISOString(), to: new Date(from + 60_000).toISOString() }, LOCAL_SERVER_ID)
+-      .then((calendar) => calendar.routines.filter((routine) => routine.active).map((routine) => routine.id));
+-  }
+-  return (
+-    <HostedServerUpsell
+-      accountId={props.account().id}
+-      canOffer={canOfferHostedServer()}
+-      serverId={upsellServerId()}
+-      activeHostRoutineIds={localActiveRoutineIds}
+-      host={upsellHost()}
+-      busy={(agentId) => Boolean(activeTurns()[agentId])}
+-      openPlans={() => setAddServerOpen(true, "upsell")}
+-      track={(action, entryPoint) =>
+-        desktopAnalytics.track("hosted_server_upsell", { action, entry_point: entryPoint })
+-      }
+-    />
+-  );
+-}
+-
+ /** The leave or owner removal confirmation that the server menu opens. */
+ function LeaveServer() {
+   const { leaveConfirmServer, leaveRestoreTarget, cancelLeaveServer, leaveConfirmedServer } = useServerSettings();
+@@ -865,7 +756,7 @@ function AppSettings(props: AccountProps) {
+   const auth = useAuth();
+   const updates = useUpdates();
+   const whatsNew = useWhatsNew();
+-  const { servers, setAddServerOpen, setServerMuted, setServerNotificationLevel } = useServers();
++  const { servers, setServerMuted, setServerNotificationLevel } = useServers();
+   const {
+     appSettingsOpen,
+     notificationFocusRequest,
+@@ -922,15 +813,11 @@ function AppSettings(props: AccountProps) {
+         onSetRemoteNetworkRoute={(route) => settingsPort().setRemoteNetworkRoute({ route })}
+         onListAccountSessions={auth.listAccountSessions}
+         onRevokeAccountSession={auth.revokeAccountSession}
+-        onSignOut={platform.landingPreview ? undefined : auth.logoutCentralAccount}
+-        billingApi={appPort().billing}
+-        licenseApi={appPort().license}
++        onSignOut={props.account() && !platform.landingPreview ? auth.logoutCentralAccount : undefined}
++        billingApi={props.account() ? appPort().billing : undefined}
++        licenseApi={props.account() ? appPort().license : undefined}
+         onContactUs={() => void appPort().openExternal("hosted-server-contact")}
+-        hostedServersApi={appPort().hostedServers}
+-        onAddHostedServer={() => {
+-          setAppSettingsOpen(false);
+-          setAddServerOpen(true, "settings_billing");
+-        }}
++        hostedServersApi={props.account() ? appPort().hostedServers : undefined}
+         onTestNotification={sendTestNotification}
+         onOpenNotificationSettings={openNotificationSettings}
+         onSetServerNotificationLevel={setServerNotificationLevel}
+diff --git a/src/renderer/src/WorkspaceShell.tsx b/src/renderer/src/WorkspaceShell.tsx
+index e962df007..d20bb5211 100644
+--- a/src/renderer/src/WorkspaceShell.tsx
++++ b/src/renderer/src/WorkspaceShell.tsx
+@@ -63,7 +63,7 @@ import { WorkspaceOverlays } from "./WorkspaceOverlays";
+  * closes the page, as each row calls `showAgents`. The other pages of the rail - schedule, usage or settings - sit outside that
+  * group and inert it.
+  */
+-export function WorkspaceShell(props: { account: () => CentralAuthUser }) {
++export function WorkspaceShell(props: { account: () => CentralAuthUser | null }) {
+   const platform = usePlatform();
+   /** A window that main opened for one chat shows that chat alone, with no rail and no sidebar. */
+   const chatWindow = platform.chatWindow !== null;
+diff --git a/src/renderer/src/analytics.ts b/src/renderer/src/analytics.ts
+index 8db987417..db598d751 100644
+--- a/src/renderer/src/analytics.ts
++++ b/src/renderer/src/analytics.ts
+@@ -723,7 +723,9 @@ const UPDATE_PHASES = new Set([
+ ]);
+ 
+ function shouldEnableDesktopAnalytics(appInfo: AppInfo, productionBuild: boolean): boolean {
+-  return appInfo.analyticsCaptureUrl !== undefined || (productionBuild && appInfo.variant === "production");
++  // OpenBot Local: only a local test capture server receives analytics; production sends nothing.
++  void productionBuild;
++  return appInfo.analyticsCaptureUrl !== undefined;
+ }
+ 
+ function sanitizeDesktopAnalyticsEvent(
+diff --git a/src/renderer/src/app-bootstrap.tsx b/src/renderer/src/app-bootstrap.tsx
+index fbe1bd427..4cf835acb 100644
+--- a/src/renderer/src/app-bootstrap.tsx
++++ b/src/renderer/src/app-bootstrap.tsx
+@@ -38,7 +38,7 @@ export function AppBootstrap() {
+     const receiveInvite = (inviteUrl: string) => {
+       flush(() => {
+         setPendingInviteUrl(inviteUrl);
+-        if (setupState()?.completed === true && centralAuth().status === "signed_in") setJoinServerOpen(true);
++        if (centralAuth().status === "signed_in" && setupState()?.completed === true) setJoinServerOpen(true);
+       });
+     };
+     const unsubscribeInvite = appPort().servers.onInvite((inviteUrl) => {
+diff --git a/src/renderer/src/error-reports.ts b/src/renderer/src/error-reports.ts
+index bc86d9320..8ed7a90c3 100644
+--- a/src/renderer/src/error-reports.ts
++++ b/src/renderer/src/error-reports.ts
+@@ -34,7 +34,8 @@ export function configureDesktopReports(
+   user: Pick<CentralAuthUser, "id" | "email"> | null,
+ ): void {
+   const capture = info.analyticsCaptureUrl;
+-  if (capture === undefined && (!import.meta.env.PROD || info.variant !== "production")) return;
++  // OpenBot Local: failure reports go nowhere unless a local test capture server is set.
++  if (capture === undefined) return;
+   queue ??= new ReportQueue(
+     indexedReportStorage("openbot-desktop-error-reports-v1"),
+     openPanelTransport({
+diff --git a/src/renderer/src/features/channels/WorkspaceChannelConversation.tsx b/src/renderer/src/features/channels/WorkspaceChannelConversation.tsx
+index be2dcabaf..c3703536a 100644
+--- a/src/renderer/src/features/channels/WorkspaceChannelConversation.tsx
++++ b/src/renderer/src/features/channels/WorkspaceChannelConversation.tsx
+@@ -27,7 +27,7 @@ import { useChannels } from "./channels-context";
+  * browser tabs come from the desktop contexts. Keyed by the channel id: the view reads its channel
+  * once, so another channel opens a new view.
+  */
+-export function WorkspaceChannelConversation(props: { account: () => CentralAuthUser }) {
++export function WorkspaceChannelConversation(props: { account: () => CentralAuthUser | null }) {
+   const channels = useChannels();
+   return (
+     <Show when={channels.state.selectedId} keyed>
+@@ -36,7 +36,7 @@ export function WorkspaceChannelConversation(props: { account: () => CentralAuth
+   );
+ }
+ 
+-function DesktopChannelConversation(props: { channelId: string; account: () => CentralAuthUser }) {
++function DesktopChannelConversation(props: { channelId: string; account: () => CentralAuthUser | null }) {
+   const platform = usePlatform();
+   const scope = useServerScope();
+   const connectors = useConnectors();
+@@ -111,7 +111,7 @@ function DesktopChannelConversation(props: { channelId: string; account: () => C
+       browserControlState={browserControlState()}
+       server={activeServer()}
+       presence={teamPresence()}
+-      currentUserEmail={props.account().email}
++      currentUserEmail={props.account()?.email ?? ""}
+       isOwnSender={isOwnSender}
+       browserEnabled={!platform.landingPreview && activeServerSupportsCapability("browser-control")}
+       openLinksInBrowser={generalSettings().externalLinkTarget.kind === "openbot"}
+diff --git a/src/renderer/src/features/conversation/WorkspaceConversation.tsx b/src/renderer/src/features/conversation/WorkspaceConversation.tsx
+index 369885c51..809c839eb 100644
+--- a/src/renderer/src/features/conversation/WorkspaceConversation.tsx
++++ b/src/renderer/src/features/conversation/WorkspaceConversation.tsx
+@@ -70,7 +70,7 @@ import type { ConversationThreads } from "./conversation-types";
+  * rather than captured once.
+  */
+ 
+-export function WorkspaceConversation(props: { account: () => CentralAuthUser }) {
++export function WorkspaceConversation(props: { account: () => CentralAuthUser | null }) {
+   const scopeIsCurrent = createScopeGuard();
+   const serverScope = useServerScope();
+   const platform = usePlatform();
+@@ -549,7 +549,7 @@ export function WorkspaceConversation(props: { account: () => CentralAuthUser })
+         browserControlState={browserControlState()}
+         server={activeServer()}
+         presence={teamPresence()}
+-        currentUserEmail={props.account().email}
++        currentUserEmail={props.account()?.email ?? ""}
+         isOwnSender={(senderId) => {
+           const state = auth.centralAuth();
+           return isReaderAuthor(senderId, {
+diff --git a/src/renderer/src/features/servers/server-actions.ts b/src/renderer/src/features/servers/server-actions.ts
+index 9c86eb4a6..bf6ba8532 100644
+--- a/src/renderer/src/features/servers/server-actions.ts
++++ b/src/renderer/src/features/servers/server-actions.ts
+@@ -17,16 +17,13 @@ import { useServers } from "./servers-context";
+ export function useServerActions() {
+   const platform = usePlatform();
+   const { t, errorMessage } = useText();
++  // OpenBot Local: the add button creates a server on this computer; hosted plans need an account.
+   const {
+     servers,
+     setServerMuted,
+-    setJoinServerOpen,
+-    setAddServerOpen,
+     setCreateLocalServerOpen,
+-    hostedServersAvailable,
+     hostedServerIds,
+     hostedServersLoaded,
+-    refreshHostedServersAvailable,
+     localServerHidden,
+     setLocalServerHidden,
+   } = useServers();
+@@ -66,28 +63,14 @@ export function useServerActions() {
+     void selectServer(serverId).catch(selectFailed);
+   }
+ 
+-  /**
+-   * Opens the hosted server plans when the account can create a hosted server, otherwise the invite
+-   * dialog. It uses the last answer, so the click does not wait for the network; the read after it is
+-   * for the next click.
+-   */
+   function add(): void {
+-    if (platform.landingPreview) return;
+-    if (hostedServersAvailable()) setAddServerOpen(true, "server_rail");
+-    else setJoinServerOpen(true);
+-    void refreshHostedServersAvailable();
++    if (!platform.landingPreview) setCreateLocalServerOpen(true);
+   }
+ 
+-  /** Opens the dialog that names a new server on this computer. The landing preview has no main process. */
+   const createLocal = platform.landingPreview ? undefined : () => setCreateLocalServerOpen(true);
+ 
+-  /**
+-   * The item for a server on this computer in the add menus of the rail and the server menu. The hosted
+-   * server plans show it in their "Other options" menu, so the add menus show it only when the add
+-   * button opens the invite dialog in place of the plans.
+-   */
+   function addMenuCreateLocal(): (() => void) | undefined {
+-    return hostedServersAvailable() ? undefined : createLocal;
++    return createLocal;
+   }
+ 
+   /**
+@@ -144,7 +127,7 @@ export function useServerActions() {
+     add,
+     createLocal,
+     addMenuCreateLocal,
+-    addCreatesServer: hostedServersAvailable,
++    addCreatesServer: () => true,
+     hiddenLocal,
+     callbacks,
+   };
+diff --git a/src/renderer/src/features/servers/server-scope.tsx b/src/renderer/src/features/servers/server-scope.tsx
+index 4459f3d47..58fa7d213 100644
+--- a/src/renderer/src/features/servers/server-scope.tsx
++++ b/src/renderer/src/features/servers/server-scope.tsx
+@@ -285,11 +285,7 @@ const ServerScope = createSimpleContext({
+ 
+     onSettled(() => {
+       const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
+-        if (
+-          !isGlobalSearchShortcut(event) ||
+-          centralAuth().status !== "signed_in" ||
+-          setupState()?.completed !== true
+-        ) {
++        if (!isGlobalSearchShortcut(event) || setupState()?.completed !== true) {
+           return;
+         }
+         event.preventDefault();
+diff --git a/src/renderer/src/features/servers/server-selection.tsx b/src/renderer/src/features/servers/server-selection.tsx
+index f6ce3b804..c8fccf420 100644
+--- a/src/renderer/src/features/servers/server-selection.tsx
++++ b/src/renderer/src/features/servers/server-selection.tsx
+@@ -1,10 +1,11 @@
+ import type { AddedAgent, AgentProviderId, NotificationOpenedEvent, ServerSummary } from "@openbot/contracts/ipc";
+ import { currentText } from "@openbot/ui/text";
+-import { onSettled } from "solid-js";
++import { createEffect, onSettled } from "solid-js";
+ import { actionToast } from "../../action-toast";
+ import { desktopAnalytics } from "../../analytics";
+ import { usePlatform } from "../../platform";
+ import { createSimpleContext } from "../../simple-context";
++import { useAuth } from "../account/account-context";
+ import { useAgents } from "../agents/agents-context";
+ import { useConversationController } from "../conversation/conversation-controller-context";
+ import { useDirectMessages } from "../conversation/direct-messages-context";
+@@ -37,7 +38,9 @@ import { activeServerId, serversPort } from "./servers-port";
+ const ServerSelection = createSimpleContext({
+   name: "Server selection",
+   init: () => {
+-    const { servers, setServers, beginServerSelection } = useServers();
++    const { centralAuth } = useAuth();
++    const { servers, setServers, beginServerSelection, currentServerSelection, activeServer, serversLoaded } =
++      useServers();
+     const { pendingInviteUrl, setPendingInviteUrl, saveSetup } = useSetup();
+     const { setSkillsMarketplaceOpen } = useSettings();
+     const { disconnectRemoteDesktopWorkspace } = useRemoteDesktop();
+@@ -53,6 +56,37 @@ const ServerSelection = createSimpleContext({
+     const { setDirectTyping } = useDirectMessages();
+     const { chatWindow } = usePlatform();
+ 
++    createEffect(
++      () => {
++        const state = centralAuth();
++        if (chatWindow || (state.status !== "signed_out" && state.status !== "error") || !serversLoaded()) return null;
++        if (agentSetupOpen() && creatingAgent()) return null;
++        const server = activeServer();
++        return server?.kind === "remote" && !server.thisComputer ? server.id : null;
++      },
++      (remoteId) => {
++        if (!remoteId) return;
++        let pending = true;
++        const selection = selectServer("local", false);
++        const selectionIsCurrent = currentServerSelection();
++        void selection
++          .catch(() => {
++            actionToast.error(currentText().t("server.select.failedTitle"), {
++              report: { operation: "team", source: "action", cause_code: "unknown" },
++            });
++          })
++          .finally(() => {
++            pending = false;
++          });
++        return () => {
++          if (pending && activeServer()?.id !== "local" && selectionIsCurrent()) {
++            beginServerSelection();
++            setBrowserVisibilitySuspended(false);
++          }
++        };
++      },
++    );
++
+     async function selectServer(
+       serverId: string,
+       trackSelection = true,
+diff --git a/src/renderer/src/features/settings/SettingsModal.tsx b/src/renderer/src/features/settings/SettingsModal.tsx
+index cb2b4ddde..1949ee727 100644
+--- a/src/renderer/src/features/settings/SettingsModal.tsx
++++ b/src/renderer/src/features/settings/SettingsModal.tsx
+@@ -82,7 +82,7 @@ export interface SettingsModalProps {
+   onCancelScheduledRestart?: () => Promise<void>;
+   onRestartWhenIdle?: () => Promise<void>;
+   onCancelIdleRestart?: () => Promise<void>;
+-  account: CentralAuthUser;
++  account: CentralAuthUser | null;
+   onUpdateAccountName: (name: string) => Promise<void>;
+   onUpdateAccountAvatar: (image: AvatarImageInput | null) => Promise<void>;
+   onCreateMobileConnect?: () => Promise<MobileConnectTicket>;
+@@ -130,14 +130,21 @@ export interface SettingsModalProps {
+  */
+ export function SettingsModal(props: SettingsModalProps) {
+   const i18n = useI18n();
+-  const [activeTab, setActiveTab] = createSignal<SettingsTab>(
+-    untrack(() => (props.initialTab === "hosted-servers" ? "billing" : props.initialTab)) ?? "general",
+-  );
++  const dynamicIslandShown = () => dynamicIslandSettingsShown(props.appInfo?.platform, props.chatWindow === true);
++  function availableTab(tab: SettingsTab | undefined): SettingsTab {
++    const requested = tab === "hosted-servers" ? "billing" : (tab ?? "general");
++    return settingsTabShown(requested, dynamicIslandShown(), Boolean(props.account)) ? requested : "general";
++  }
++  const [activeTab, setActiveTab] = createSignal<SettingsTab>(untrack(() => availableTab(props.initialTab)));
+   let modalElement: HTMLElement | undefined;
+   const profile = createSettingsProfileStore(props, () => activeTab() === "profile");
+   const profileActivity = createProfileActivityStore(
+-    () => props.open && activeTab() === "profile",
+-    (stats) => renderProfileShareImage(props.account, stats),
++    () => Boolean(props.account) && props.open && activeTab() === "profile",
++    (stats) => {
++      const account = props.account;
++      if (!account) throw new Error(i18n.t("account.login.signInTitle"));
++      return renderProfileShareImage(account, stats);
++    },
+   );
+   const mobileConnect = createSettingsMobileConnectStore(props, () => activeTab() === "mobile-connect");
+   const updates = createSettingsUpdatesStore(props);
+@@ -171,11 +178,10 @@ export function SettingsModal(props: SettingsModalProps) {
+     },
+   );
+ 
+-  const dynamicIslandShown = () => dynamicIslandSettingsShown(props.appInfo?.platform, props.chatWindow === true);
+   createEffect(
+     () => {
+       const tab = props.open ? props.openTab : undefined;
+-      return tab === "hosted-servers" ? "billing" : tab;
++      return tab ? availableTab(tab) : undefined;
+     },
+     (tab) => {
+       if (!tab) return;
+@@ -183,7 +189,14 @@ export function SettingsModal(props: SettingsModalProps) {
+       agents.showList();
+     },
+   );
+-  const visibleNavItems = () => navItems.filter((item) => settingsTabShown(item.value, dynamicIslandShown()));
++  createEffect(
++    () => settingsTabShown(activeTab(), dynamicIslandShown(), Boolean(props.account)),
++    (shown) => {
++      if (!shown) setActiveTab("general");
++    },
++  );
++  const visibleNavItems = () =>
++    navItems.filter((item) => settingsTabShown(item.value, dynamicIslandShown(), Boolean(props.account)));
+ 
+   const title = () => i18n.t(navItem(activeTab()).titleKey);
+   const description = () => i18n.t(navItem(activeTab()).descriptionKey);
+@@ -205,7 +218,7 @@ export function SettingsModal(props: SettingsModalProps) {
+         value === "mobile-connect" ||
+         value === "updates"
+       ) {
+-        setActiveTab(value);
++        setActiveTab(availableTab(value));
+       }
+     },
+     orientation: "vertical" as const,
+@@ -348,41 +361,49 @@ export function SettingsModal(props: SettingsModalProps) {
+         </Tabs.Content>
+ 
+         <Tabs.Content value="profile" class="settings-modal-tab-panel profile-panel" data-tab="profile">
+-          <SettingsProfileTab
+-            store={profile}
+-            account={props.account}
+-            activity={profileActivity}
+-            canListSessions={Boolean(props.onListAccountSessions)}
+-            canRevokeSession={Boolean(props.onRevokeAccountSession)}
+-            onSignOut={props.onSignOut}
+-          />
++          <Show when={props.account}>
++            {(account) => (
++              <SettingsProfileTab
++                store={profile}
++                account={account()}
++                activity={profileActivity}
++                canListSessions={Boolean(props.onListAccountSessions)}
++                canRevokeSession={Boolean(props.onRevokeAccountSession)}
++                onSignOut={props.onSignOut}
++              />
++            )}
++          </Show>
+         </Tabs.Content>
+ 
+         <Tabs.Content value="billing" class="settings-modal-tab-panel" data-tab="billing">
+-          <BillingPanel
+-            store={billing}
+-            available={Boolean(props.billingApi)}
+-            hostedServers={hostedServers}
+-            onAddServer={hostedServers.state.available ? props.onAddHostedServer : undefined}
+-            license={
+-              <LicenseSection
+-                store={license}
+-                onManagePayment={() => void billing.openPortal({ flow: "manage" })}
+-                onContactUs={licenseContactUs(props.onContactUs)}
+-              />
+-            }
+-          />
++          <Show when={props.account}>
++            <BillingPanel
++              store={billing}
++              available={Boolean(props.billingApi)}
++              hostedServers={hostedServers}
++              onAddServer={hostedServers.state.available ? props.onAddHostedServer : undefined}
++              license={
++                <LicenseSection
++                  store={license}
++                  onManagePayment={() => void billing.openPortal({ flow: "manage" })}
++                  onContactUs={licenseContactUs(props.onContactUs)}
++                />
++              }
++            />
++          </Show>
+         </Tabs.Content>
+ 
+         <Tabs.Content value="mobile-connect" class="settings-modal-tab-panel" data-tab="mobile-connect">
+-          <SettingsMobileConnectTab
+-            store={mobileConnect}
+-            canCreateTicket={Boolean(props.onCreateMobileConnect)}
+-            canCancelTicket={Boolean(props.onCancelMobileConnect)}
+-            canManageLink={Boolean(props.onCreateMobileConnectLink && props.onRevokeMobileConnectLink)}
+-            canRevokeDevice={Boolean(props.onRevokeMobileConnectedDevice)}
+-            canSetRoute={Boolean(props.onSetRemoteNetworkRoute)}
+-          />
++          <Show when={props.account}>
++            <SettingsMobileConnectTab
++              store={mobileConnect}
++              canCreateTicket={Boolean(props.onCreateMobileConnect)}
++              canCancelTicket={Boolean(props.onCancelMobileConnect)}
++              canManageLink={Boolean(props.onCreateMobileConnectLink && props.onRevokeMobileConnectLink)}
++              canRevokeDevice={Boolean(props.onRevokeMobileConnectedDevice)}
++              canSetRoute={Boolean(props.onSetRemoteNetworkRoute)}
++            />
++          </Show>
+         </Tabs.Content>
+ 
+         <Tabs.Content value="updates" class="settings-modal-tab-panel" data-tab="updates">
+diff --git a/src/renderer/src/features/settings/settings-tabs.ts b/src/renderer/src/features/settings/settings-tabs.ts
+index 987c5cc7d..3c3719fae 100644
+--- a/src/renderer/src/features/settings/settings-tabs.ts
++++ b/src/renderer/src/features/settings/settings-tabs.ts
+@@ -202,8 +202,9 @@ export function navItem(tab: SettingsTab): SettingsNavItem {
+  * Whether the settings panel and its search show the tab. Hosted servers opens from its own entry, not
+  * from this panel.
+  */
+-export function settingsTabShown(tab: SettingsTab, dynamicIslandShown: boolean): boolean {
++export function settingsTabShown(tab: SettingsTab, dynamicIslandShown: boolean, hasAccount: boolean): boolean {
+   if (tab === "hosted-servers") return false;
++  if (!hasAccount && (tab === "profile" || tab === "billing" || tab === "mobile-connect")) return false;
+   return tab !== "dynamic-island" || dynamicIslandShown;
+ }
+ 
+diff --git a/src/renderer/src/features/window/SettingsPage.tsx b/src/renderer/src/features/window/SettingsPage.tsx
+index 288b9cc51..9e74d7c6f 100644
+--- a/src/renderer/src/features/window/SettingsPage.tsx
++++ b/src/renderer/src/features/window/SettingsPage.tsx
+@@ -3,6 +3,7 @@ import { Button, Input, Search, Server } from "@openbot/ui";
+ import { createSignal, For, flush, Show } from "solid-js";
+ import { useI18n } from "../../i18n-context";
+ import { usePlatform } from "../../platform";
++import { useAuth } from "../account/account-context";
+ import type { ServerSettingsSection } from "../servers/ServerSettingsModal";
+ import { activeServerHasProviderSettings, serverSupportsCapability } from "../servers/server-capabilities";
+ import { useServerSettings } from "../servers/server-settings";
+@@ -76,9 +77,14 @@ export function SettingsPage(props: { kind: SettingsKind }) {
+   const serverSettings = useServerSettings();
+   const platform = usePlatform();
+   const { activeServer } = useServers();
++  const { signedInAccount } = useAuth();
+   const [query, setQuery] = createSignal("");
+   const tabShown = (tab: SettingsTab) =>
+-    settingsTabShown(tab, dynamicIslandSettingsShown(platform.appInfo()?.platform, platform.chatWindow !== null));
++    settingsTabShown(
++      tab,
++      dynamicIslandSettingsShown(platform.appInfo()?.platform, platform.chatWindow !== null),
++      Boolean(signedInAccount()),
++    );
+   /** The rows of the tabs shown on this computer, then the sections that the active server's settings show. */
+   const searchRows = (): SearchRow[] => {
+     const server = activeServer();
+diff --git a/src/renderer/src/global-search-sources.ts b/src/renderer/src/global-search-sources.ts
+index c44da77cc..44c3e3a7a 100644
+--- a/src/renderer/src/global-search-sources.ts
++++ b/src/renderer/src/global-search-sources.ts
+@@ -9,6 +9,7 @@ import { useText } from "@openbot/ui/text";
+ import { createEffect, createMemo, createSignal } from "solid-js";
+ import { formatMessageTime } from "./app-message-projection";
+ import { appPort } from "./app-port";
++import { useAuth } from "./features/account/account-context";
+ import { useAgents } from "./features/agents/agents-context";
+ import { useChannels } from "./features/channels/channels-context";
+ import { globalSearchChannels } from "./features/channels/global-search-channels";
+@@ -16,7 +17,7 @@ import { activeServerHasProviderSettings, serverCanAdminister } from "./features
+ import { useServerSettings } from "./features/servers/server-settings";
+ import { useServers } from "./features/servers/servers-context";
+ import { useSettings } from "./features/settings/settings-context";
+-import { dynamicIslandSettingsShown, navItems } from "./features/settings/settings-tabs";
++import { dynamicIslandSettingsShown, navItems, settingsTabShown } from "./features/settings/settings-tabs";
+ import { useUsage } from "./features/usage/usage-context";
+ import { useNavigation } from "./navigation";
+ import { usePlatform } from "./platform";
+@@ -31,6 +32,7 @@ const FILE_SEARCH_LIMIT = 50;
+ export function useGlobalSearchSources(open: () => boolean) {
+   const { t } = useText();
+   const platform = usePlatform();
++  const { signedInAccount } = useAuth();
+   const channels = useChannels();
+   const { agentList, agentSetupOpen, creatingAgent, openAgentSetup, setSettingsRequest } = useAgents();
+   const { selectAgent, globalSearchOpener } = useNavigation();
+@@ -149,8 +151,7 @@ export function useGlobalSearchSources(open: () => boolean) {
+         });
+       }
+       for (const item of navItems) {
+-        // Hosted servers shows only for an account with hosting, which the dialog checks when it opens.
+-        if (item.value === "hosted-servers" || (item.value === "dynamic-island" && !dynamicIslandShown)) continue;
++        if (!settingsTabShown(item.value, dynamicIslandShown, Boolean(signedInAccount()))) continue;
+         list.push({
+           id: `settings:${item.value}`,
+           label: t(item.titleKey),
+-- 
+2.47.3
+
